@@ -1,0 +1,93 @@
+# Guide de mise a jour automatique - Maraichage Manager
+# =====================================================
+
+## Configuration initiale (une seule fois)
+
+### 1. Creer un depot GitHub
+
+- Aller sur https://github.com/new
+- Nom du depot : maraichage-manager (ou ce que vous voulez)
+- Le mettre en PUBLIC (obligatoire pour les releases)
+- Creer le depot
+
+### 2. Configurer l'application
+
+Dans le fichier package.json, remplacer dans la section "publish" :
+  "owner": "OWNER"     ->  "owner": "votre-pseudo-github"
+  "repo": "REPO"       ->  "repo": "maraichage-manager"
+
+### 3. Creer un token GitHub (pour publier)
+
+- Aller sur https://github.com/settings/tokens
+- Creer un token classique avec le scope "repo"
+- Copier le token
+
+### 4. Configurer le token sur votre PC
+
+Ouvrir un terminal et taper :
+  set GH_TOKEN=votre_token_ici    (Windows)
+  export GH_TOKEN=votre_token_ici (Mac/Linux)
+
+Ou creer un fichier .env a la racine du projet :
+  GH_TOKEN=votre_token_ici
+
+
+## Publier une mise a jour
+
+### Etape 1 : Faire vos modifications dans le code
+
+### Etape 2 : Incrementer la version dans package.json
+  Exemple : "version": "1.0.0"  ->  "version": "1.1.0"
+
+### Etape 3 : Publier
+  npm run publish-win
+
+  Cela va :
+  - Construire l'executable
+  - Creer une Release GitHub automatiquement
+  - Uploader l'installeur et le fichier latest.yml
+
+  C'est tout ! Les utilisateurs recevront la mise a jour automatiquement.
+
+### Alternative : build local puis upload manuel
+  npm run build-win
+  Puis uploader manuellement les fichiers du dossier dist/ dans une GitHub Release
+
+
+## Ce qui se passe cote utilisateur
+
+1. L'app verifie automatiquement au demarrage s'il y a une mise a jour
+2. Si oui : un bandeau vert apparait "Nouvelle version disponible"
+3. L'utilisateur clique "Mettre a jour"
+4. Le telechargement se fait en arriere-plan avec barre de progression
+5. Quand c'est pret : "Redemarrer maintenant" ou "Plus tard"
+6. Au redemarrage, la nouvelle version est installee automatiquement
+7. Les donnees sont preservees (elles sont dans AppData/Roaming)
+
+
+## Schema des versions (semver)
+
+X.Y.Z
+- X = changement majeur
+- Y = nouvelle fonctionnalite
+- Z = correction de bug
+
+Exemples : 1.0.0 -> 1.0.1 (bugfix) -> 1.1.0 (feature) -> 2.0.0 (majeur)
+
+
+## Commandes disponibles
+
+npm run electron       Lancer en mode dev
+npm run build-win      Construire le .exe (sans publier)
+npm run publish-win    Construire ET publier sur GitHub
+npm start              Lancer en mode navigateur (sans Electron)
+
+
+## Notes importantes
+
+- La base de donnees est dans AppData/Roaming/Maraichage Manager/
+  Elle survit aux mises a jour et desinstallations
+- Si le depot GitHub n'est pas configure, l'app fonctionne normalement
+  sans mise a jour (pas d'erreur visible)
+- L'auto-update ne fonctionne que dans l'app packagee (pas en mode dev)
+- Le token GH_TOKEN n'est necessaire QUE pour publier, pas pour recevoir
