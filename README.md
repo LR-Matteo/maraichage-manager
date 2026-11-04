@@ -79,3 +79,27 @@ npm run build-linux     # Linux (.AppImage)
 - **Build** : electron-builder (installeur Windows/Mac/Linux)
 
 La base de données est créée automatiquement au premier lancement.
+
+### Organisation du code
+
+```
+main.js                  Point d'entrée Electron (fenêtre, menus, mises à jour)
+server.js                Point d'entrée mode navigateur (npm start)
+src/
+  db.js                  Accès SQLite (sql.js), création des tables, migrations
+  api.js                 Assemblage des routes + gestion des erreurs
+  helpers.js             Validation, filtres de période, calculs de dates
+  routes/                Une route par domaine : produits, clients, commandes,
+                         depenses, stats, preparation, sauvegarde
+  exports/preparation.js Génération PDF / Excel des commandes à préparer
+public/
+  index.html, style.css
+  js/
+    etat.js, utils.js, navigation.js, main.js   Socle commun
+    pages/               Une page de l'application par fichier
+    composants/          Éléments partagés entre pages (panneau à préparer)
+    sauvegarde.js, mise-a-jour.js
+```
+
+Les scripts du frontend sont des scripts classiques (pas de build) chargés
+dans l'ordre par `index.html` : ils partagent leurs variables globales.

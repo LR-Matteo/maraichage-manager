@@ -20,9 +20,7 @@
     "files": [
       "main.js",
       "server.js",
-      "db.js",
-      "api.js",
-      "exports.js",
+      "src/**/*",
       "public/**/*",
       "package.json",
       "node_modules/**/*",

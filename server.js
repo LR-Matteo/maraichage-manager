@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
-const dbLayer = require('./db');
-const { createApiRouter, apiErrorHandler } = require('./api');
+const dbLayer = require('./src/db');
+const { createApiRouter, apiErrorHandler } = require('./src/api');
 
 const app = express();
 const PORT = 3847;

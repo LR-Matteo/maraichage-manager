@@ -6,8 +6,8 @@ var Menu = electron.Menu;
 var ipcMain = electron.ipcMain;
 var path = require('path');
 var expressLib = require('express');
-var dbLayer = require('./db');
-var apiLib = require('./api');
+var dbLayer = require('./src/db');
+var apiLib = require('./src/api');
 
 var PORT = 3847;
 var mainWindow = null;
