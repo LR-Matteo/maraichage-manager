@@ -40,18 +40,32 @@ Ou creer un fichier .env a la racine du projet :
   Exemple : "version": "1.0.0"  ->  "version": "1.1.0"
 
 ### Etape 3 : Publier
-  npm run publish-win
+  Double-cliquer sur publier-update.bat
 
-  Cela va :
-  - Construire l'executable
-  - Creer une Release GitHub automatiquement
-  - Uploader l'installeur et le fichier latest.yml
+  Ce script fait tout automatiquement :
+  - Verifie que la version n'a pas deja ete publiee
+  - Construit l'executable
+  - Cree la Release GitHub et upload l'installeur + latest.yml
+  - Sort la Release du mode "brouillon" (electron-builder la cree en
+    brouillon par defaut ; une release en brouillon est invisible pour
+    l'auto-updater, ce script s'en occupe automatiquement)
 
   C'est tout ! Les utilisateurs recevront la mise a jour automatiquement.
 
-### Alternative : build local puis upload manuel
-  npm run build-win
-  Puis uploader manuellement les fichiers du dossier dist/ dans une GitHub Release
+### Alternative manuelle (si le script ne convient pas)
+  npm run publish-win
+  Puis aller sur github.com/LR-Matteo/maraichage-manager/releases,
+  ouvrir la release en brouillon nouvellement creee et cliquer sur
+  "Publish release" (etape indispensable, sinon personne ne recoit
+  la mise a jour).
+
+### Note : logiciel antivirus avec inspection HTTPS
+  Certains antivirus (Avast, Kaspersky, ESET...) interceptent le trafic
+  HTTPS localement pour l'analyser, ce qui peut faire echouer l'upload
+  vers GitHub avec une erreur "unable to verify the first certificate".
+  publier-update.bat detecte et contourne automatiquement ce cas. En
+  publication manuelle (npm run publish-win), il faudrait sinon definir
+  NODE_EXTRA_CA_CERTS vers le certificat racine de l'antivirus.
 
 
 ## Ce qui se passe cote utilisateur

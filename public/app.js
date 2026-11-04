@@ -9,21 +9,70 @@ let clients = [];
 let commandes = [];
 let depenses = [];
 let chartInstances = {};
+let relanceLimit = 8;
+let produitStatsChart = null;
+let currentProduitStatsId = null;
+let statsGranularite = 'mois';
+let produitStatsGranularite = 'mois';
+let commandeModalContext = 'commandes';
+let commandesStatutFilter = 'toutes';
 
 // ========== UTILITIES ==========
 function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n);
 }
 
+// Parse une date "YYYY-MM-DD" comme une date locale (minuit heure locale),
+// au lieu de laisser `new Date(str)` l'interpreter comme minuit UTC : cette
+// derniere interpretation peut faire glisser la date d'un jour a l'affichage
+// selon le fuseau horaire de l'utilisateur.
+function parseLocalDate(str) {
+  if (!str) return null;
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// Renvoie la date du jour au format "YYYY-MM-DD" en heure LOCALE.
+// `new Date().toISOString().slice(0,10)` renvoie la date en UTC : en France
+// (UTC+1/+2), cela peut afficher la veille comme date par defaut pendant les
+// toutes premieres heures de la journee locale.
+function todayLocal(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function fmtDate(d) {
   if (!d) return '';
-  return new Date(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+  return parseLocalDate(d).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// Pourcentage qu'une valeur represente par rapport a un total, arrondi a
+// l'entier. Renvoie null si le total est nul/absent (pas de pourcentage a afficher).
+function pct(value, total) {
+  if (!total || total <= 0) return null;
+  return Math.round((value / total) * 100);
 }
 
 function fmtMonth(m) {
+  if (!m) return '';
   const [y, mo] = m.split('-');
   const months = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
   return months[parseInt(mo) - 1] + ' ' + y;
+}
+
+function fmtWeek(w) {
+  if (!w) return '';
+  const [y, wk] = w.split('-W');
+  return `S${parseInt(wk, 10)} ${y}`;
+}
+
+// Formatte une "periode" (mois "YYYY-MM" ou semaine "YYYY-Www") selon la
+// granularite courante. Tolerant a une valeur manquante (ex: donnee mal
+// formee cote base) plutot que de planter tout l'affichage des graphiques.
+function fmtPeriode(p, granularite) {
+  return granularite === 'semaine' ? fmtWeek(p) : fmtMonth(p);
 }
 
 function toast(msg, type = 'success') {
@@ -44,13 +93,16 @@ async function api(url, method = 'GET', body = null) {
   return data;
 }
 
-function openModal(html) {
-  document.getElementById('modal-content').innerHTML = html;
+function openModal(html, opts = {}) {
+  const modalEl = document.getElementById('modal-content');
+  modalEl.innerHTML = html;
+  modalEl.classList.toggle('modal-lg', !!opts.large);
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
+  if (produitStatsChart) { produitStatsChart.destroy(); produitStatsChart = null; }
 }
 
 function destroyCharts() {
@@ -94,6 +146,7 @@ async function renderDashboard() {
   const topProduits = await api('/stats/top-produits?limit=5');
   const recent = await api('/commandes');
   const recentCmd = recent.slice(0, 5);
+  const clientsRelance = await api('/stats/clients-a-relancer?limit=' + relanceLimit);
 
   main.innerHTML = `
     <div class="page-header">
@@ -131,6 +184,18 @@ async function renderDashboard() {
     </div>
 
     <div class="charts-grid">
+      <div class="card full-width" id="relance-card">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <h3>🔔 Clients à relancer en priorité</h3>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <label for="relance-limit" style="font-size:13px;color:var(--text-secondary);font-weight:500;">Afficher</label>
+            <input id="relance-limit" type="number" min="1" max="50" value="${relanceLimit}" class="form-control" style="width:64px;padding:6px 8px;" onchange="updateRelanceLimit(this.value)">
+          </div>
+        </div>
+        <p class="form-hint" style="margin:-4px 0 12px;">Clients actifs classés du moins récent au plus récent achat — les premiers de la liste sont ceux à recontacter en priorité pour qu'ils recommandent.</p>
+        <div id="relance-list-body">${renderRelanceList(clientsRelance)}</div>
+      </div>
+
       <div class="card">
         <div class="card-header"><h3>🏆 Top Clients</h3></div>
         ${topClients.length === 0 ? '<p style="color:var(--text-muted);font-size:14px;">Aucune donnée</p>' : `
@@ -142,7 +207,7 @@ async function renderDashboard() {
                 <div class="rank-name">${esc(c.nom)}</div>
                 <div class="rank-detail">${c.nb_commandes} commande${c.nb_commandes > 1 ? 's' : ''}</div>
               </div>
-              <div class="rank-value">${fmt(c.ca_total)}</div>
+              <div class="rank-value">${fmt(c.ca_total)}${pct(c.ca_total, stats.chiffre_affaires) != null ? `<span class="rank-pct">${pct(c.ca_total, stats.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
           `).join('')}
         </ul>`}
@@ -159,7 +224,7 @@ async function renderDashboard() {
                 <div class="rank-name">${esc(p.nom)}</div>
                 <div class="rank-detail">${p.quantite_totale} ${p.unite === 'kg' ? 'kg vendus' : 'unités vendues'}</div>
               </div>
-              <div class="rank-value">${fmt(p.ca_total)}</div>
+              <div class="rank-value">${fmt(p.ca_total)}${pct(p.ca_total, stats.chiffre_affaires) != null ? `<span class="rank-pct">${pct(p.ca_total, stats.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
           `).join('')}
         </ul>`}
@@ -185,7 +250,47 @@ async function renderDashboard() {
         </div>`}
       </div>
     </div>
+
+    ${preparationPanelHTML()}
   `;
+
+  initPreparationPanel();
+}
+
+function renderRelanceList(list) {
+  if (list.length === 0) return '<p style="color:var(--text-muted);font-size:14px;">Aucun client actif avec un historique de commande pour le moment</p>';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return `<ul class="rank-list">
+    ${list.map((c, i) => {
+      const jours = Math.max(0, Math.round((today - parseLocalDate(c.derniere_commande)) / 86400000));
+      const badgeClass = jours >= 30 ? 'badge-red' : jours >= 14 ? 'badge-gold' : 'badge-blue';
+      return `
+      <li class="rank-item">
+        <div class="rank-number rank-other">${i + 1}</div>
+        <div class="rank-info">
+          <div class="rank-name">${esc(c.nom)}</div>
+          <div class="rank-detail">Dernière commande le ${fmtDate(c.derniere_commande)} · ${c.nb_commandes} commande${c.nb_commandes > 1 ? 's' : ''} au total</div>
+          <div class="rank-contact">
+            ${c.telephone ? `<span>📞 ${esc(c.telephone)}</span>` : ''}
+            ${c.email ? `<a href="mailto:${esc(c.email)}">✉️ ${esc(c.email)}</a>` : ''}
+            ${!c.telephone && !c.email ? '<span class="no-contact">Aucune coordonnée enregistrée</span>' : ''}
+          </div>
+        </div>
+        <div class="relance-meta">
+          <span class="badge ${badgeClass}">${jours} j</span>
+        </div>
+      </li>`;
+    }).join('')}
+  </ul>`;
+}
+
+async function updateRelanceLimit(val) {
+  relanceLimit = Math.max(1, parseInt(val) || 8);
+  try {
+    const list = await api('/stats/clients-a-relancer?limit=' + relanceLimit);
+    document.getElementById('relance-list-body').innerHTML = renderRelanceList(list);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ========== PRODUITS ==========
@@ -232,6 +337,7 @@ function renderProduitsTable(list) {
           <td><span class="badge badge-green">${p.unite === 'kg' ? 'au kg' : 'à l\'unité'}</span></td>
           <td class="table-actions">
             <button class="btn-icon" onclick="openProduitModal(${p.id})" title="Modifier">✏️</button>
+            <button class="btn-icon" onclick="openProduitStats(${p.id})" title="Statistiques">📊</button>
             <button class="btn-icon danger" onclick="deleteProduit(${p.id})" title="Supprimer">🗑️</button>
           </td>
         </tr>
@@ -284,6 +390,7 @@ async function saveProduit(id) {
   const prix = parseFloat(document.getElementById('p-prix').value);
   const unite = document.getElementById('p-unite').value;
   if (!nom || isNaN(prix)) { toast('Veuillez remplir tous les champs obligatoires', 'error'); return; }
+  if (prix < 0) { toast('Le prix ne peut pas être négatif', 'error'); return; }
   try {
     if (id) { await api('/produits/' + id, 'PUT', { nom, prix, unite }); toast('Produit modifié'); }
     else { await api('/produits', 'POST', { nom, prix, unite }); toast('Produit créé'); }
@@ -293,9 +400,351 @@ async function saveProduit(id) {
 }
 
 async function deleteProduit(id) {
-  if (!confirm('Supprimer ce produit ?')) return;
+  if (!confirm('Supprimer ce produit ? Les commandes existantes qui l\'utilisent seront conservées (le produit y apparaîtra comme "Produit supprimé").')) return;
   try { await api('/produits/' + id, 'DELETE'); toast('Produit supprimé'); renderProduits(); }
   catch (e) { toast(e.message, 'error'); }
+}
+
+// ========== FICHE STATISTIQUE PRODUIT ==========
+async function openProduitStats(id, debut, fin) {
+  currentProduitStatsId = id;
+  if (!debut || !fin) {
+    const now = new Date();
+    debut = todayLocal(new Date(now.getFullYear() - 1, now.getMonth(), 1));
+    fin = todayLocal(now);
+  }
+
+  // On affiche tout de suite la coquille de la modale (entete + filtres +
+  // etat "Chargement") au lieu d'attendre la reponse de l'API avant le
+  // moindre retour visuel : le clic reagit instantanement, seul le contenu
+  // chiffre apparait un instant apres.
+  const p = produits.find(x => x.id === id);
+  openModal(renderProduitStatsShell(p ? p.nom : '', debut, fin), { large: true });
+
+  await loadProduitStatsBody(id, debut, fin);
+}
+
+async function refreshProduitStats() {
+  const debut = document.getElementById('pf-debut').value;
+  const fin = document.getElementById('pf-fin').value;
+  await loadProduitStatsBody(currentProduitStatsId, debut, fin);
+}
+
+// Ne remplace que le contenu chiffre de la modale (pas l'entete ni les
+// champs de filtre) : "Actualiser" ne recree plus toute la modale a chaque
+// clic, ce qui evite un rendu complet inutile et rend le filtrage plus fluide.
+async function loadProduitStatsBody(id, debut, fin) {
+  const body = document.getElementById('produit-stats-body');
+  if (body) body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Chargement...</div>';
+
+  let data;
+  try {
+    data = await api(`/stats/produit/${id}?debut=${debut}&fin=${fin}&granularite=${produitStatsGranularite}`);
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>${e.message}</p></div>`;
+    return;
+  }
+
+  const bodyEl = document.getElementById('produit-stats-body');
+  if (!bodyEl) return; // la modale a ete fermee entre-temps
+  bodyEl.innerHTML = renderProduitStatsBody(data);
+
+  // On laisse le navigateur peindre la mise en page avant de creer le
+  // graphique Chart.js (double requestAnimationFrame) : la creation du
+  // canvas ne rentre plus en concurrence avec l'animation d'ouverture de la
+  // modale (transform + flou d'arriere-plan), ce qui supprime l'a-coup
+  // ressenti a l'ouverture.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    renderProduitStatsChart(data.evolution, data.produit.unite);
+  }));
+}
+
+function setProduitStatsGranularite(val) {
+  produitStatsGranularite = val;
+  loadProduitStatsBody(currentProduitStatsId, document.getElementById('pf-debut').value, document.getElementById('pf-fin').value);
+}
+
+function deltaBadge(pctVal) {
+  if (pctVal == null) return '<span class="stat-delta flat">vs période préc. : —</span>';
+  const cls = pctVal > 0 ? 'up' : pctVal < 0 ? 'down' : 'flat';
+  const sign = pctVal > 0 ? '+' : '';
+  return `<span class="stat-delta ${cls}">${sign}${pctVal}% vs période préc.</span>`;
+}
+
+function renderProduitStatsShell(nom, debut, fin) {
+  return `
+    <div class="modal-header">
+      <h3>📊 ${esc(nom)}</h3>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="date-range-picker" style="margin-bottom:20px;">
+        <div class="filter-group"><label>Du</label><input type="date" id="pf-debut" value="${debut}"></div>
+        <div class="filter-group"><label>Au</label><input type="date" id="pf-fin" value="${fin}"></div>
+        <button class="btn btn-primary btn-sm" onclick="refreshProduitStats()">Actualiser</button>
+      </div>
+      <div id="produit-stats-body">
+        <div style="text-align:center;padding:40px;color:var(--text-muted);">Chargement...</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>
+    </div>
+  `;
+}
+
+function renderProduitStatsBody(data) {
+  const p = data.produit;
+  const uniteLabel = p.unite === 'kg' ? 'kg' : 'unités';
+  const uniteShort = p.unite === 'kg' ? 'kg' : 'u';
+  const comp = data.comparaison_precedente;
+
+  return `
+      <div class="stats-grid">
+        <div class="stat-card green">
+          <div class="stat-label">Quantité vendue</div>
+          <div class="stat-value green">${data.quantite_totale} ${uniteLabel}</div>
+          ${comp ? deltaBadge(comp.delta_quantite_pct) : ''}
+        </div>
+        <div class="stat-card gold">
+          <div class="stat-label">Chiffre d'affaires</div>
+          <div class="stat-value gold">${fmt(data.ca_total)}</div>
+          ${comp ? deltaBadge(comp.delta_ca_pct) : ''}
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Moyenne / semaine</div>
+          <div class="stat-value blue">${Math.round(data.moyenne_semaine_quantite * 10) / 10} ${uniteShort}</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">CA moyen / semaine</div>
+          <div class="stat-value blue">${fmt(data.moyenne_semaine_ca)}</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Prix moyen constaté</div>
+          <div class="stat-value green">${data.prix_moyen_constate != null ? fmt(data.prix_moyen_constate) + '/' + uniteShort : '—'}</div>
+          <div class="form-hint" style="margin:6px 0 0;">Prix catalogue actuel : ${fmt(p.prix)}/${uniteShort}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Commandes · Clients</div>
+          <div class="stat-value">${data.nb_commandes} · ${data.nb_clients}</div>
+        </div>
+      </div>
+
+      <div class="flex-between flex-wrap gap-sm" style="margin:8px 0 12px;">
+        <h4 style="font-size:14px;font-weight:600;color:var(--text-secondary);margin:0;">Évolution ${produitStatsGranularite === 'semaine' ? 'hebdomadaire' : 'mensuelle'}</h4>
+        <div class="segmented">
+          <button class="${produitStatsGranularite === 'mois' ? 'active' : ''}" data-val="mois" onclick="setProduitStatsGranularite('mois')">Mois</button>
+          <button class="${produitStatsGranularite === 'semaine' ? 'active' : ''}" data-val="semaine" onclick="setProduitStatsGranularite('semaine')">Semaine</button>
+        </div>
+      </div>
+      <div class="chart-wrapper" style="height:220px;"><canvas id="chart-produit-mensuel"></canvas></div>
+
+      <div class="mt-2">
+        <h4 style="font-size:14px;font-weight:600;margin:20px 0 12px;color:var(--text-secondary)">🏆 Top clients acheteurs</h4>
+        ${data.top_clients.length === 0 ? '<p style="color:var(--text-muted);font-size:14px;">Aucune donnée</p>' : `
+        <ul class="rank-list">
+          ${data.top_clients.map((c, i) => `
+            <li class="rank-item">
+              <div class="rank-number rank-${i < 3 ? i + 1 : 'other'}">${i + 1}</div>
+              <div class="rank-info">
+                <div class="rank-name">${esc(c.nom)}</div>
+                <div class="rank-detail">${c.quantite} ${uniteLabel} · ${c.nb_commandes} cmd</div>
+              </div>
+              <div class="rank-value">${fmt(c.ca_total)}</div>
+            </li>
+          `).join('')}
+        </ul>`}
+      </div>
+  `;
+}
+
+function renderProduitStatsChart(evolution, unite) {
+  if (produitStatsChart) { produitStatsChart.destroy(); produitStatsChart = null; }
+  const canvas = document.getElementById('chart-produit-mensuel');
+  if (!canvas || evolution.length === 0) return;
+
+  produitStatsChart = new Chart(canvas, {
+    data: {
+      labels: evolution.map(m => fmtPeriode(m.periode, produitStatsGranularite)),
+      datasets: [
+        {
+          type: 'bar',
+          label: `Quantité (${unite === 'kg' ? 'kg' : 'u'})`,
+          data: evolution.map(m => m.quantite),
+          backgroundColor: 'rgba(61,124,71,0.7)',
+          borderRadius: 4,
+          yAxisID: 'y'
+        },
+        {
+          type: 'line',
+          label: 'CA (€)',
+          data: evolution.map(m => m.ca),
+          borderColor: '#2980B9',
+          backgroundColor: 'rgba(41,128,185,0.15)',
+          fill: true,
+          tension: 0.3,
+          pointBackgroundColor: '#2980B9',
+          pointRadius: 3,
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top', labels: { usePointStyle: true, padding: 16 } },
+        tooltip: { callbacks: { label: ctx => ctx.dataset.yAxisID === 'y1' ? ctx.dataset.label + ': ' + fmt(ctx.raw) : ctx.dataset.label + ': ' + ctx.raw } }
+      },
+      scales: {
+        y: { position: 'left', beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } },
+        y1: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { callback: v => fmt(v) } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+// ========== COMMANDES A PREPARER (panneau partage Dashboard + Statistiques) ==========
+function prepQS(debut, fin) {
+  return (debut && fin) ? `debut=${debut}&fin=${fin}` : '';
+}
+
+function preparationPanelHTML() {
+  return `
+    <div class="card mb-2" id="preparation-panel">
+      <div class="flex-between flex-wrap gap-sm">
+        <h3 style="font-size:15px">🧺 Commandes à préparer</h3>
+        <div class="date-range-picker">
+          <label>Du</label>
+          <input type="date" id="prep-debut" value="">
+          <label>Au</label>
+          <input type="date" id="prep-fin" value="">
+          <button class="btn btn-primary btn-sm" onclick="refreshPreparationPanel()">Filtrer</button>
+          <button class="btn btn-secondary btn-sm" onclick="resetPreparationFilter()">Tout afficher</button>
+        </div>
+      </div>
+      <p class="form-hint" style="margin:10px 0 0;">Commandes "en cours de préparation" (pas encore validées comme vendues). Filtre indépendant de celui des statistiques ci-dessus — utile pour préparer par exemple "les livraisons de cette semaine".</p>
+      <div id="preparation-body">
+        <div style="text-align:center;padding:30px;color:var(--text-muted)">Chargement...</div>
+      </div>
+    </div>
+  `;
+}
+
+function initPreparationPanel() {
+  loadPreparationPanel('', '');
+}
+
+function refreshPreparationPanel() {
+  const debut = document.getElementById('prep-debut')?.value || '';
+  const fin = document.getElementById('prep-fin')?.value || '';
+  loadPreparationPanel(debut, fin);
+}
+
+function resetPreparationFilter() {
+  const d = document.getElementById('prep-debut');
+  const f = document.getElementById('prep-fin');
+  if (d) d.value = '';
+  if (f) f.value = '';
+  loadPreparationPanel('', '');
+}
+
+async function loadPreparationPanel(debut, fin) {
+  const body = document.getElementById('preparation-body');
+  if (body) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted)">Chargement...</div>';
+
+  const qs = prepQS(debut, fin);
+  let recap, commandesEnCours;
+  try {
+    [recap, commandesEnCours] = await Promise.all([
+      api(`/stats/a-preparer${qs ? '?' + qs : ''}`),
+      api(`/commandes?statut=en_cours${qs ? '&' + qs : ''}`)
+    ]);
+  } catch (e) {
+    const bodyEl = document.getElementById('preparation-body');
+    if (bodyEl) bodyEl.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>${e.message}</p></div>`;
+    return;
+  }
+
+  const bodyEl = document.getElementById('preparation-body');
+  if (!bodyEl) return; // page changee entre-temps
+  bodyEl.innerHTML = renderPreparationBody(recap, commandesEnCours, debut, fin);
+}
+
+function renderPreparationBody(recap, commandesEnCours, debut, fin) {
+  return `
+    <p class="form-hint" style="margin:12px 0 16px;">${recap.nb_commandes} commande${recap.nb_commandes > 1 ? 's' : ''} en cours de préparation${debut && fin ? ' sur la période sélectionnée' : ''}.</p>
+
+    ${recap.produits.length === 0 ? '' : `
+    <div class="table-container mb-2">
+      <table>
+        <thead><tr><th>Produit</th><th class="text-right">Quantité à préparer</th><th class="text-right">Commandes</th></tr></thead>
+        <tbody>
+          ${recap.produits.map(r => `
+            <tr>
+              <td><strong>${esc(r.nom)}</strong></td>
+              <td class="text-right">${r.quantite_totale} ${r.unite === 'kg' ? 'kg' : 'unité(s)'}</td>
+              <td class="text-right">${r.nb_commandes}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`}
+
+    ${commandesEnCours.length === 0 ? '<div class="empty-state"><div class="icon">🧺</div><p>Aucune commande en cours de préparation.</p></div>' : `
+    <div class="table-container">
+      <table>
+        <thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Produits</th><th>Livraison</th><th class="text-right">Total</th><th class="text-right">Actions</th></tr></thead>
+        <tbody>
+          ${commandesEnCours.map(c => `
+            <tr>
+              <td><span class="badge badge-blue">#${c.id}</span></td>
+              <td>${fmtDate(c.date_commande)}</td>
+              <td><strong>${esc(c.client_nom)}</strong></td>
+              <td>${c.lignes.map(l => esc(l.produit_nom)).join(', ')}</td>
+              <td>${c.livraison ? esc(c.livraison) : '—'}</td>
+              <td class="text-right price-display">${fmt(c.prix_total)}</td>
+              <td class="table-actions">
+                <button class="btn-icon" onclick="validerCommande(${c.id}, 'preparation')" title="Marquer comme vendue">✅</button>
+                <button class="btn-icon" onclick="openCommandeModal(${c.id}, 'preparation')" title="Modifier">✏️</button>
+                <button class="btn-icon danger" onclick="deleteCommande(${c.id}, 'preparation')" title="Supprimer">🗑️</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex-between flex-wrap gap-sm mt-2">
+      <span class="form-hint">Exporter le récapitulatif et le détail des commandes ci-dessus</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="exportPreparation('pdf')">📄 Export PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportPreparation('xlsx')">📊 Export Excel</button>
+      </div>
+    </div>`}
+  `;
+}
+
+async function exportPreparation(format) {
+  const debut = document.getElementById('prep-debut')?.value || '';
+  const fin = document.getElementById('prep-fin')?.value || '';
+  const qs = prepQS(debut, fin);
+  try {
+    const res = await fetch(`/api/export/preparation?format=${format}${qs ? '&' + qs : ''}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Erreur export');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `commandes_a_preparer_${todayLocal()}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Export généré');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ========== CLIENTS ==========
@@ -333,13 +782,14 @@ async function renderClients() {
 function renderClientsTable(list) {
   if (list.length === 0) return '<div class="empty-state"><div class="icon">👤</div><p>Aucun client enregistré</p><button class="btn btn-primary" onclick="openClientModal()">Ajouter un client</button></div>';
   return `<table>
-    <thead><tr><th>Nom</th><th>Téléphone</th><th>Email</th><th class="text-right">Actions</th></tr></thead>
+    <thead><tr><th>Nom</th><th>Téléphone</th><th>Email</th><th>Statut</th><th class="text-right">Actions</th></tr></thead>
     <tbody>
       ${list.map(c => `
         <tr>
           <td><strong>${esc(c.nom)}</strong></td>
           <td>${c.telephone ? esc(c.telephone) : '<span style="color:var(--text-muted)">—</span>'}</td>
           <td>${c.email ? esc(c.email) : '<span style="color:var(--text-muted)">—</span>'}</td>
+          <td>${c.actif ? '<span class="badge badge-green">Actif</span>' : '<span class="badge badge-gray">Inactif</span>'}</td>
           <td class="table-actions">
             <button class="btn-icon" onclick="openClientModal(${c.id})" title="Modifier">✏️</button>
             <button class="btn-icon danger" onclick="deleteClient(${c.id})" title="Supprimer">🗑️</button>
@@ -378,6 +828,13 @@ function openClientModal(id) {
           <input id="c-email" type="email" class="form-control" value="${c && c.email ? esc(c.email) : ''}" placeholder="client@email.com">
         </div>
       </div>
+      <div class="form-group">
+        <label class="form-check">
+          <input id="c-actif" type="checkbox" ${!c || c.actif ? 'checked' : ''}>
+          Client actif
+        </label>
+        <span class="form-hint">Un client inactif reste dans l'historique mais n'apparaît plus dans la liste pour une nouvelle commande</span>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
@@ -390,17 +847,18 @@ async function saveClient(id) {
   const nom = document.getElementById('c-nom').value.trim();
   const telephone = document.getElementById('c-tel').value.trim();
   const email = document.getElementById('c-email').value.trim();
+  const actif = document.getElementById('c-actif').checked;
   if (!nom) { toast('Le nom est requis', 'error'); return; }
   try {
-    if (id) { await api('/clients/' + id, 'PUT', { nom, telephone, email }); toast('Client modifié'); }
-    else { await api('/clients', 'POST', { nom, telephone, email }); toast('Client créé'); }
+    if (id) { await api('/clients/' + id, 'PUT', { nom, telephone, email, actif }); toast('Client modifié'); }
+    else { await api('/clients', 'POST', { nom, telephone, email, actif }); toast('Client créé'); }
     closeModal();
     renderClients();
   } catch (e) { toast(e.message, 'error'); }
 }
 
 async function deleteClient(id) {
-  if (!confirm('Supprimer ce client ?')) return;
+  if (!confirm('Supprimer ce client ? Ses commandes existantes seront conservées (il y apparaîtra comme "Client supprimé"). Pour le retirer sans perdre son historique, préférez le désactiver via "Modifier".')) return;
   try { await api('/clients/' + id, 'DELETE'); toast('Client supprimé'); renderClients(); }
   catch (e) { toast(e.message, 'error'); }
 }
@@ -411,7 +869,7 @@ let commandeLignes = [];
 async function renderCommandes() {
   commandes = await api('/commandes');
   const main = document.getElementById('main-content');
-  
+
   main.innerHTML = `
     <div class="page-header">
       <div>
@@ -424,35 +882,63 @@ async function renderCommandes() {
       </button>
     </div>
 
-    <div class="search-bar">
+    <div class="search-bar" style="justify-content:space-between;">
       <div class="search-input-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input type="text" placeholder="Rechercher par client ou lieu de livraison..." oninput="filterCommandes(this.value)">
+      </div>
+      <div class="segmented">
+        <button class="${commandesStatutFilter === 'toutes' ? 'active' : ''}" onclick="setCommandesStatutFilter('toutes')">Toutes</button>
+        <button class="${commandesStatutFilter === 'en_cours' ? 'active' : ''}" onclick="setCommandesStatutFilter('en_cours')">En cours</button>
+        <button class="${commandesStatutFilter === 'vendu' ? 'active' : ''}" onclick="setCommandesStatutFilter('vendu')">Vendu</button>
       </div>
     </div>
 
     <div class="card" style="padding:0">
       <div class="table-container" id="commandes-table">
-        ${renderCommandesTable(commandes)}
+        ${renderCommandesTable(applyCommandesFilters(''))}
       </div>
     </div>
   `;
 }
 
+function setCommandesStatutFilter(val) {
+  commandesStatutFilter = val;
+  renderCommandes();
+}
+
+function applyCommandesFilters(searchQuery) {
+  let list = commandes;
+  if (commandesStatutFilter !== 'toutes') list = list.filter(c => c.statut === commandesStatutFilter);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    list = list.filter(c => c.client_nom.toLowerCase().includes(q) || (c.livraison || '').toLowerCase().includes(q));
+  }
+  return list;
+}
+
+function statutBadge(statut) {
+  return statut === 'vendu'
+    ? '<span class="badge badge-green">Vendu</span>'
+    : '<span class="badge badge-gold">En cours</span>';
+}
+
 function renderCommandesTable(list) {
   if (list.length === 0) return '<div class="empty-state"><div class="icon">🛒</div><p>Aucune commande enregistrée</p><button class="btn btn-primary" onclick="openCommandeModal()">Créer une commande</button></div>';
   return `<table>
-    <thead><tr><th>N°</th><th>Date</th><th>Client</th><th>Produits</th><th>Livraison</th><th class="text-right">Total</th><th class="text-right">Actions</th></tr></thead>
+    <thead><tr><th>N°</th><th>Statut</th><th>Date</th><th>Client</th><th>Produits</th><th>Livraison</th><th class="text-right">Total</th><th class="text-right">Actions</th></tr></thead>
     <tbody>
       ${list.map(c => `
         <tr class="cmd-row" onclick="openCommandeDetail(${c.id})" style="cursor:pointer">
           <td><span class="badge badge-blue">#${c.id}</span></td>
+          <td>${statutBadge(c.statut)}</td>
           <td>${fmtDate(c.date_commande)}</td>
           <td><strong>${esc(c.client_nom)}</strong></td>
           <td><span class="badge badge-green">${c.lignes.length} produit${c.lignes.length > 1 ? 's' : ''}</span></td>
           <td>${c.livraison ? `<span class="badge badge-livraison">${esc(c.livraison)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
           <td class="text-right price-display">${fmt(c.prix_total)}${c.prix_manuel != null ? ' <span class="badge badge-gold" title="Prix modifié manuellement">Promo</span>' : ''}</td>
           <td class="table-actions" onclick="event.stopPropagation()">
+            ${c.statut === 'en_cours' ? `<button class="btn-icon" onclick="validerCommande(${c.id})" title="Marquer comme vendue">✅</button>` : ''}
             <button class="btn-icon" onclick="openCommandeModal(${c.id})" title="Modifier">✏️</button>
             <button class="btn-icon danger" onclick="deleteCommande(${c.id})" title="Supprimer">🗑️</button>
           </td>
@@ -467,7 +953,11 @@ function openCommandeDetail(id) {
   if (!c) return;
   
   const totalCalc = c.lignes.reduce((s, l) => s + l.prix_ligne, 0);
-  const hasPromo = c.prix_manuel != null && c.prix_manuel !== totalCalc;
+  // Comparaison avec tolerance (0.5 centime) plutot que !== strict : deux
+  // sommes en euros calculees differemment peuvent diverger de quelques
+  // 10^-14 a cause des flottants, ce qui faisait parfois apparaitre le badge
+  // "Promo" alors qu'aucun prix manuel differencie n'avait ete applique.
+  const hasPromo = c.prix_manuel != null && Math.abs(c.prix_manuel - totalCalc) > 0.005;
   
   openModal(`
     <div class="modal-header">
@@ -476,6 +966,10 @@ function openCommandeDetail(id) {
     </div>
     <div class="modal-body">
       <div class="detail-meta">
+        <div class="detail-meta-item">
+          <span class="detail-meta-label">Statut</span>
+          <span class="detail-meta-value">${statutBadge(c.statut)}</span>
+        </div>
         <div class="detail-meta-item">
           <span class="detail-meta-label">Client</span>
           <span class="detail-meta-value">${esc(c.client_nom)}</span>
@@ -532,19 +1026,26 @@ function openCommandeDetail(id) {
 }
 
 function filterCommandes(q) {
-  q = q.toLowerCase();
-  const filtered = commandes.filter(c => c.client_nom.toLowerCase().includes(q) || (c.livraison || '').toLowerCase().includes(q));
-  document.getElementById('commandes-table').innerHTML = renderCommandesTable(filtered);
+  document.getElementById('commandes-table').innerHTML = renderCommandesTable(applyCommandesFilters(q));
 }
 
-async function openCommandeModal(id) {
+async function openCommandeModal(id, context) {
+  commandeModalContext = context || 'commandes';
   const allProduits = await api('/produits');
   const allClients = await api('/clients');
   produits = allProduits;
   clients = allClients;
-  
-  const cmd = id ? commandes.find(x => x.id === id) : null;
-  
+
+  // Depuis le panneau "a preparer", la commande a modifier ne fait pas
+  // forcement partie du tableau `commandes` (charge pour la page Commandes) :
+  // on va la rechercher via l'API si besoin plutot que de supposer qu'elle
+  // est deja en memoire.
+  let cmd = id ? commandes.find(x => x.id === id) : null;
+  if (id && !cmd) {
+    const all = await api('/commandes');
+    cmd = all.find(x => x.id === id) || null;
+  }
+
   if (cmd) {
     commandeLignes = cmd.lignes.map(l => ({
       produit_id: l.produit_id,
@@ -565,13 +1066,22 @@ async function openCommandeModal(id) {
         <div class="form-group">
           <label>Client *</label>
           <select id="cmd-client" class="form-control">
-            ${allClients.map(c => `<option value="${c.id}" ${cmd && cmd.client_id === c.id ? 'selected' : ''}>${esc(c.nom)}</option>`).join('')}
+            ${cmd && !allClients.find(c => c.id === cmd.client_id) ? `<option value="${cmd.client_id}" selected disabled>Client supprimé</option>` : ''}
+            ${allClients.map(c => `<option value="${c.id}" ${cmd && cmd.client_id === c.id ? 'selected' : ''}>${esc(c.nom)}${!c.actif ? ' (inactif)' : ''}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
           <label>Date *</label>
-          <input id="cmd-date" type="date" class="form-control" value="${cmd ? cmd.date_commande : new Date().toISOString().slice(0,10)}">
+          <input id="cmd-date" type="date" class="form-control" value="${cmd ? cmd.date_commande : todayLocal()}">
         </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-check">
+          <input id="cmd-statut-vendu" type="checkbox" ${cmd ? (cmd.statut === 'vendu' ? 'checked' : '') : ''}>
+          Marquer comme vendue
+        </label>
+        <span class="form-hint">Décochée, la commande reste "En cours de préparation" : elle apparaît dans le panneau à préparer et ne compte dans aucune statistique tant qu'elle n'est pas validée.</span>
       </div>
 
       <div class="form-group">
@@ -621,6 +1131,7 @@ function renderLignes() {
     ${commandeLignes.map((l, i) => `
       <div class="ligne-item">
         <select class="form-control" onchange="updateLigneProduit(${i}, this.value)">
+          ${!produits.find(p => p.id == l.produit_id) ? `<option value="${l.produit_id}" selected disabled>Produit supprimé</option>` : ''}
           ${produits.map(p => `<option value="${p.id}" ${l.produit_id == p.id ? 'selected' : ''}>${esc(p.nom)} (${fmt(p.prix)}/${p.unite})</option>`).join('')}
         </select>
         <input type="number" step="0.1" min="0.1" class="form-control" value="${l.quantite}" onchange="updateLigneQty(${i}, this.value)">
@@ -642,12 +1153,13 @@ function updateLigneProduit(i, produitId) {
 }
 
 function updateLigneQty(i, val) {
-  commandeLignes[i].quantite = parseFloat(val) || 0;
+  // Clamp a 0 : une quantite negative n'a pas de sens et fausserait les totaux.
+  commandeLignes[i].quantite = Math.max(0, parseFloat(val) || 0);
   renderLignes();
 }
 
 function updateLignePrix(i, val) {
-  commandeLignes[i].prix_unitaire = parseFloat(val) || 0;
+  commandeLignes[i].prix_unitaire = Math.max(0, parseFloat(val) || 0);
   renderLignes();
 }
 
@@ -675,35 +1187,55 @@ async function saveCommande(id) {
   const prixManuelVal = document.getElementById('cmd-prix-manuel').value;
   const prix_manuel = prixManuelVal !== '' ? parseFloat(prixManuelVal) : null;
   const livraison = document.getElementById('cmd-livraison').value.trim();
-  
+  const statut = document.getElementById('cmd-statut-vendu').checked ? 'vendu' : 'en_cours';
+
   if (!client_id || !date_commande || commandeLignes.length === 0) {
     toast('Veuillez remplir tous les champs obligatoires', 'error');
     return;
   }
-  
+  for (const l of commandeLignes) {
+    if (!(l.quantite > 0)) { toast('La quantité de chaque produit doit être supérieure à 0', 'error'); return; }
+    if (!(l.prix_unitaire >= 0)) { toast('Le prix unitaire ne peut pas être négatif', 'error'); return; }
+  }
+  if (prix_manuel != null && prix_manuel < 0) { toast('Le prix manuel ne peut pas être négatif', 'error'); return; }
+
   const lignes = commandeLignes.map(l => ({
     produit_id: l.produit_id,
     quantite: l.quantite,
     prix_unitaire: l.prix_unitaire
   }));
-  
+
   try {
     if (id) {
-      await api('/commandes/' + id, 'PUT', { client_id, date_commande, lignes, prix_manuel, livraison });
+      await api('/commandes/' + id, 'PUT', { client_id, date_commande, lignes, prix_manuel, livraison, statut });
       toast('Commande modifiée');
     } else {
-      await api('/commandes', 'POST', { client_id, date_commande, lignes, prix_manuel, livraison });
-      toast('Commande créée');
+      await api('/commandes', 'POST', { client_id, date_commande, lignes, prix_manuel, livraison, statut });
+      toast(statut === 'vendu' ? 'Commande créée et marquée vendue' : 'Commande créée (en cours de préparation)');
     }
     closeModal();
-    renderCommandes();
+    if (commandeModalContext === 'preparation') refreshPreparationPanel();
+    else renderCommandes();
   } catch (e) { toast(e.message, 'error'); }
 }
 
-async function deleteCommande(id) {
+async function deleteCommande(id, context) {
   if (!confirm('Supprimer cette commande ?')) return;
-  try { await api('/commandes/' + id, 'DELETE'); toast('Commande supprimée'); renderCommandes(); }
-  catch (e) { toast(e.message, 'error'); }
+  try {
+    await api('/commandes/' + id, 'DELETE');
+    toast('Commande supprimée');
+    if (context === 'preparation') refreshPreparationPanel();
+    else renderCommandes();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function validerCommande(id, context) {
+  try {
+    await api('/commandes/' + id + '/valider', 'POST');
+    toast('Commande validée comme vendue');
+    if (context === 'preparation') refreshPreparationPanel();
+    else renderCommandes();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ========== DEPENSES ==========
@@ -781,7 +1313,7 @@ function openDepenseModal(id) {
       <div class="form-row">
         <div class="form-group">
           <label>Date *</label>
-          <input id="d-date" type="date" class="form-control" value="${d ? d.date_depense : new Date().toISOString().slice(0,10)}">
+          <input id="d-date" type="date" class="form-control" value="${d ? d.date_depense : todayLocal()}">
         </div>
         <div class="form-group">
           <label>Montant (€) *</label>
@@ -806,6 +1338,7 @@ async function saveDepense(id) {
   const prix = parseFloat(document.getElementById('d-prix').value);
   const categorie = document.getElementById('d-cat').value.trim();
   if (!nom || !date_depense || isNaN(prix)) { toast('Veuillez remplir tous les champs obligatoires', 'error'); return; }
+  if (prix < 0) { toast('Le montant ne peut pas être négatif', 'error'); return; }
   try {
     if (id) { await api('/depenses/' + id, 'PUT', { nom, date_depense, prix, categorie }); toast('Dépense modifiée'); }
     else { await api('/depenses', 'POST', { nom, date_depense, prix, categorie }); toast('Dépense créée'); }
@@ -823,11 +1356,11 @@ async function deleteDepense(id) {
 // ========== STATISTIQUES ==========
 async function renderStatistiques() {
   const main = document.getElementById('main-content');
-  
+
   // Default range: last 12 months
   const now = new Date();
-  const debut = new Date(now.getFullYear() - 1, now.getMonth(), 1).toISOString().slice(0, 10);
-  const fin = now.toISOString().slice(0, 10);
+  const debut = todayLocal(new Date(now.getFullYear() - 1, now.getMonth(), 1));
+  const fin = todayLocal(now);
 
   main.innerHTML = `
     <div class="page-header">
@@ -845,6 +1378,10 @@ async function renderStatistiques() {
           <input type="date" id="stat-debut" value="${debut}">
           <label>Au</label>
           <input type="date" id="stat-fin" value="${fin}">
+          <div class="segmented">
+            <button class="active" data-val="mois" onclick="setStatsGranularite('mois')">Mois</button>
+            <button data-val="semaine" onclick="setStatsGranularite('semaine')">Semaine</button>
+          </div>
           <button class="btn btn-primary btn-sm" onclick="refreshStats()">Actualiser</button>
         </div>
       </div>
@@ -853,9 +1390,20 @@ async function renderStatistiques() {
     <div id="stats-content">
       <div style="text-align:center;padding:40px;color:var(--text-muted)">Chargement des statistiques...</div>
     </div>
+
+    ${preparationPanelHTML()}
   `;
 
   await refreshStats();
+  initPreparationPanel();
+}
+
+function setStatsGranularite(val) {
+  statsGranularite = val;
+  document.querySelectorAll('#main-content .segmented button').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === val);
+  });
+  refreshStats();
 }
 
 async function refreshStats() {
@@ -863,18 +1411,22 @@ async function refreshStats() {
   const debut = document.getElementById('stat-debut').value;
   const fin = document.getElementById('stat-fin').value;
   const qs = `debut=${debut}&fin=${fin}`;
-  
-  const [dashboard, topClients, topProduits, mensuel, parSemaine, parMois, evoClients, catDep, livraisons] = await Promise.all([
+  const qsG = `${qs}&granularite=${statsGranularite}`;
+
+  const [dashboard, topClients, topProduits, mensuel, parSemaine, parClientsSemaine, parMois, evoClients, catDep, livraisons] = await Promise.all([
     api(`/stats/dashboard?${qs}`),
     api(`/stats/top-clients?${qs}&limit=10`),
     api(`/stats/top-produits?${qs}&limit=10`),
-    api(`/stats/mensuel?${qs}`),
+    api(`/stats/mensuel?${qsG}`),
     api(`/stats/commandes-par-semaine?${qs}`),
-    api(`/stats/commandes-par-mois?${qs}`),
-    api(`/stats/evolution-clients?${qs}`),
+    api(`/stats/clients-par-semaine?${qs}`),
+    api(`/stats/commandes-par-mois?${qsG}`),
+    api(`/stats/evolution-clients?${qsG}`),
     api(`/stats/categories-depenses?${qs}`),
     api(`/stats/livraisons?${qs}`)
   ]);
+
+  const periodeLabel = statsGranularite === 'semaine' ? 'semaine' : 'mois';
 
   const container = document.getElementById('stats-content');
   container.innerHTML = `
@@ -895,6 +1447,11 @@ async function refreshStats() {
         <div class="stat-label">Moy. commandes/semaine</div>
         <div class="stat-value gold">${parSemaine.moyenne}</div>
       </div>
+      <div class="stat-card gold">
+        <div class="stat-label">Moy. clients/semaine</div>
+        <div class="stat-value gold">${parClientsSemaine.moyenne}</div>
+        <div class="form-hint" style="margin-top:6px;">Clients distincts ayant commandé, en moyenne par semaine</div>
+      </div>
       <div class="stat-card blue">
         <div class="stat-label">Panier moyen</div>
         <div class="stat-value blue">${fmt(dashboard.panier_moyen)}</div>
@@ -907,7 +1464,7 @@ async function refreshStats() {
 
     <div class="charts-grid">
       <div class="card full-width">
-        <div class="card-header"><h3>📊 CA / Dépenses / Bénéfice par mois</h3></div>
+        <div class="card-header"><h3>📊 CA / Dépenses / Bénéfice par ${periodeLabel}</h3></div>
         <div class="chart-wrapper"><canvas id="chart-mensuel"></canvas></div>
       </div>
 
@@ -922,7 +1479,7 @@ async function refreshStats() {
                 <div class="rank-name">${esc(c.nom)}</div>
                 <div class="rank-detail">${c.nb_commandes} cmd${c.nb_commandes > 1 ? 's' : ''}</div>
               </div>
-              <div class="rank-value">${fmt(c.ca_total)}</div>
+              <div class="rank-value">${fmt(c.ca_total)}${pct(c.ca_total, dashboard.chiffre_affaires) != null ? `<span class="rank-pct">${pct(c.ca_total, dashboard.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
           `).join('')}
         </ul>`}
@@ -939,19 +1496,19 @@ async function refreshStats() {
                 <div class="rank-name">${esc(p.nom)}</div>
                 <div class="rank-detail">${p.quantite_totale} ${p.unite === 'kg' ? 'kg' : 'unités'}</div>
               </div>
-              <div class="rank-value">${fmt(p.ca_total)}</div>
+              <div class="rank-value">${fmt(p.ca_total)}${pct(p.ca_total, dashboard.chiffre_affaires) != null ? `<span class="rank-pct">${pct(p.ca_total, dashboard.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
           `).join('')}
         </ul>`}
       </div>
 
       <div class="card">
-        <div class="card-header"><h3>📦 Commandes par mois</h3></div>
+        <div class="card-header"><h3>📦 Commandes par ${periodeLabel}</h3></div>
         <div class="chart-wrapper"><canvas id="chart-cmd-mois"></canvas></div>
       </div>
 
       <div class="card">
-        <div class="card-header"><h3>👥 Clients actifs par mois</h3></div>
+        <div class="card-header"><h3>👥 Clients qui commandent par ${periodeLabel}</h3></div>
         <div class="chart-wrapper"><canvas id="chart-clients"></canvas></div>
       </div>
 
@@ -991,7 +1548,7 @@ async function refreshStats() {
     chartInstances['mensuel'] = new Chart(document.getElementById('chart-mensuel'), {
       type: 'bar',
       data: {
-        labels: mensuel.map(m => fmtMonth(m.mois)),
+        labels: mensuel.map(m => fmtPeriode(m.periode, statsGranularite)),
         datasets: [
           { label: "Chiffre d'affaires", data: mensuel.map(m => m.ca), backgroundColor: 'rgba(61,124,71,0.7)', borderRadius: 4 },
           { label: 'Dépenses', data: mensuel.map(m => m.depenses), backgroundColor: 'rgba(192,57,43,0.7)', borderRadius: 4 },
@@ -1018,7 +1575,7 @@ async function refreshStats() {
     chartInstances['cmdMois'] = new Chart(document.getElementById('chart-cmd-mois'), {
       type: 'line',
       data: {
-        labels: parMois.map(m => fmtMonth(m.mois)),
+        labels: parMois.map(m => fmtPeriode(m.periode, statsGranularite)),
         datasets: [{
           label: 'Commandes',
           data: parMois.map(m => m.nb),
@@ -1047,9 +1604,9 @@ async function refreshStats() {
     chartInstances['clients'] = new Chart(document.getElementById('chart-clients'), {
       type: 'line',
       data: {
-        labels: evoClients.map(m => fmtMonth(m.mois)),
+        labels: evoClients.map(m => fmtPeriode(m.periode, statsGranularite)),
         datasets: [{
-          label: 'Clients actifs',
+          label: 'Clients qui commandent',
           data: evoClients.map(m => m.nb_clients),
           borderColor: '#2980B9',
           backgroundColor: 'rgba(41,128,185,0.1)',
@@ -1130,7 +1687,7 @@ async function exportDB() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `maraichage_backup_${new Date().toISOString().slice(0,10)}.db`;
+    a.download = `maraichage_backup_${todayLocal()}.db`;
     a.click();
     URL.revokeObjectURL(url);
     toast('Base de données exportée');
@@ -1178,7 +1735,7 @@ async function exportCSV() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${name}_${new Date().toISOString().slice(0,10)}.csv`;
+      a.download = `${name}_${todayLocal()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -1187,11 +1744,17 @@ async function exportCSV() {
 }
 
 // ========== ESCAPE HTML ==========
+// Remplacement de caracteres plutot qu'un aller-retour par le DOM
+// (createElement + textContent + innerHTML) : beaucoup plus rapide sur des
+// tableaux de plusieurs centaines de lignes, puisqu'on evite de creer un
+// element DOM a chaque appel. Echappe aussi les guillemets ("'), ce que
+// l'ancienne version via innerHTML ne faisait pas dans un noeud texte : une
+// valeur contenant un " pouvait casser hors d'un attribut HTML comme
+// value="${esc(...)}" (ex: nom de produit).
+const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function esc(str) {
   if (!str) return '';
-  const el = document.createElement('span');
-  el.textContent = str;
-  return el.innerHTML;
+  return String(str).replace(/[&<>"']/g, ch => ESCAPE_MAP[ch]);
 }
 
 // ========== AUTO-UPDATE ==========
