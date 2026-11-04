@@ -111,6 +111,8 @@ function startServer() {
       }
     });
 
+    srv.use(apiLib.apiErrorHandler);
+
     // --- LISTEN ---
     httpServer = srv.listen(PORT, '127.0.0.1', function() {
       console.log('Server OK on port ' + PORT);

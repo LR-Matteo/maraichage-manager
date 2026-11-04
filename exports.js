@@ -8,6 +8,16 @@ function fmtEuros(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n || 0);
 }
 
+// Les quantites sont des REAL sommes en SQL : sans arrondi, 0.1 + 0.2 kg
+// s'afficherait "0.30000000000000004". 3 decimales suffisent (grammes).
+function roundQty(n) {
+  return Math.round((n || 0) * 1000) / 1000;
+}
+
+function fmtQty(n) {
+  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 3 }).format(roundQty(n));
+}
+
 function periodeLabel(debut, fin) {
   return debut && fin ? `Période du ${debut} au ${fin}` : 'Toutes les commandes en cours';
 }
@@ -43,7 +53,10 @@ function writePreparationPDF(res, { recap, commandes, debut, fin }) {
   ];
   ensureSpace(20);
   doc.fontSize(10).font('Helvetica-Bold');
-  colsRecap.forEach(c => doc.text(c.label, c.x, doc.y, { width: c.width, continued: false, lineBreak: false }));
+  // y fige avant la boucle : chaque doc.text() fait avancer doc.y, les
+  // en-tetes s'affichaient sinon en escalier au lieu d'etre alignes.
+  const headerY = doc.y;
+  colsRecap.forEach(c => doc.text(c.label, c.x, headerY, { width: c.width, continued: false, lineBreak: false }));
   doc.moveDown(1);
   doc.font('Helvetica');
 
@@ -57,7 +70,7 @@ function writePreparationPDF(res, { recap, commandes, debut, fin }) {
       const uniteLabel = r.unite === 'kg' ? 'kg' : 'unité(s)';
       doc.fontSize(10);
       doc.text(r.nom, colsRecap[0].x, y, { width: colsRecap[0].width });
-      doc.text(`${r.quantite_totale} ${uniteLabel}`, colsRecap[1].x, y, { width: colsRecap[1].width });
+      doc.text(`${fmtQty(r.quantite_totale)} ${uniteLabel}`, colsRecap[1].x, y, { width: colsRecap[1].width });
       doc.text(String(r.nb_commandes), colsRecap[2].x, y, { width: colsRecap[2].width });
       doc.moveDown(0.7);
     }
@@ -87,7 +100,7 @@ function writePreparationPDF(res, { recap, commandes, debut, fin }) {
       ensureSpace(16);
       const uniteLabel = l.produit_unite === 'kg' ? 'kg' : 'unité(s)';
       doc.fontSize(10).font('Helvetica')
-        .text(`•  ${l.produit_nom} — ${l.quantite} ${uniteLabel}  (${fmtEuros(l.prix_ligne)})`, 55, doc.y, { width: 480 });
+        .text(`•  ${l.produit_nom} — ${fmtQty(l.quantite)} ${uniteLabel}  (${fmtEuros(l.prix_ligne)})`, 55, doc.y, { width: 480 });
     }
 
     doc.moveDown(0.3);
@@ -111,7 +124,7 @@ async function writePreparationExcel(res, { recap, commandes, debut, fin }) {
   const header1 = sheet1.addRow(['Produit', 'Unité', 'Quantité totale', 'Nb commandes']);
   header1.font = { bold: true };
   for (const r of recap) {
-    sheet1.addRow([r.nom, r.unite === 'kg' ? 'kg' : 'unité', r.quantite_totale, r.nb_commandes]);
+    sheet1.addRow([r.nom, r.unite === 'kg' ? 'kg' : 'unité', roundQty(r.quantite_totale), r.nb_commandes]);
   }
   sheet1.columns = [{ width: 30 }, { width: 12 }, { width: 16 }, { width: 14 }];
 
@@ -141,11 +154,11 @@ async function writePreparationExcel(res, { recap, commandes, debut, fin }) {
   const clientsTries = [...parClient.keys()].sort((a, b) => a.localeCompare(b, 'fr'));
   for (const nomClient of clientsTries) {
     const parProduit = parClient.get(nomClient);
-    sheet2.addRow([nomClient, ...produitCols.map(p => parProduit.get(p.produit_id) || 0)]);
+    sheet2.addRow([nomClient, ...produitCols.map(p => roundQty(parProduit.get(p.produit_id)))]);
   }
 
   if (clientsTries.length > 0) {
-    const totalRow = sheet2.addRow(['TOTAL', ...produitCols.map(p => p.quantite_totale)]);
+    const totalRow = sheet2.addRow(['TOTAL', ...produitCols.map(p => roundQty(p.quantite_totale))]);
     totalRow.font = { bold: true };
   }
 

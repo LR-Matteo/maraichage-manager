@@ -22,6 +22,22 @@ function fmt(n) {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(n);
 }
 
+// Quantite (kg ou unites) arrondie a 3 decimales : les sommes de REAL faites
+// en SQL donnent sinon des affichages du type "0.30000000000000004 kg".
+function fmtQty(n) {
+  return new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 3 }).format(Math.round((n || 0) * 1000) / 1000);
+}
+
+// Une commande a un vrai prix promotionnel si le prix manuel differe du
+// total des lignes (tolerance d'un demi-centime pour les erreurs d'arrondi
+// flottant). Partage entre la liste des commandes et la fiche detail.
+function lignesTotal(c) {
+  return c.lignes.reduce((s, l) => s + l.prix_ligne, 0);
+}
+function hasPromo(c) {
+  return c.prix_manuel != null && Math.abs(c.prix_manuel - lignesTotal(c)) > 0.005;
+}
+
 // Parse une date "YYYY-MM-DD" comme une date locale (minuit heure locale),
 // au lieu de laisser `new Date(str)` l'interpreter comme minuit UTC : cette
 // derniere interpretation peut faire glisser la date d'un jour a l'affichage
@@ -88,8 +104,11 @@ async function api(url, method = 'GET', body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch('/api' + url, opts);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Erreur serveur');
+  // Tolere une reponse non-JSON (page d'erreur, proxy...) au lieu d'afficher
+  // un obscur "Unexpected token <" a l'utilisateur.
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.error) || `Erreur serveur (${res.status})`);
+  if (data === null) throw new Error('Réponse invalide du serveur');
   return data;
 }
 
@@ -141,12 +160,7 @@ async function renderPage() {
 // ========== DASHBOARD ==========
 async function renderDashboard() {
   const main = document.getElementById('main-content');
-  const stats = await api('/stats/dashboard');
-  const topClients = await api('/stats/top-clients?limit=5');
-  const topProduits = await api('/stats/top-produits?limit=5');
-  const recent = await api('/commandes');
-  const recentCmd = recent.slice(0, 5);
-  const clientsRelance = await api('/stats/clients-a-relancer?limit=' + relanceLimit);
+  const bodyHTML = await dashboardBodyHTML();
 
   main.innerHTML = `
     <div class="page-header">
@@ -156,6 +170,33 @@ async function renderDashboard() {
       </div>
     </div>
 
+    <div id="dashboard-body">${bodyHTML}</div>
+
+    ${preparationPanelHTML()}
+  `;
+
+  initPreparationPanel();
+}
+
+// Recharge uniquement les indicateurs du tableau de bord (pas le panneau
+// "a preparer" ni son filtre), ex: apres validation d'une commande.
+async function refreshDashboardBody() {
+  const html = await dashboardBodyHTML();
+  const el = document.getElementById('dashboard-body');
+  if (el) el.innerHTML = html;
+}
+
+async function dashboardBodyHTML() {
+  const [stats, topClients, topProduits, recent, clientsRelance] = await Promise.all([
+    api('/stats/dashboard'),
+    api('/stats/top-clients?limit=5'),
+    api('/stats/top-produits?limit=5'),
+    api('/commandes'),
+    api('/stats/clients-a-relancer?limit=' + relanceLimit)
+  ]);
+  const recentCmd = recent.slice(0, 5);
+
+  return `
     <div class="stats-grid">
       <div class="stat-card green">
         <div class="stat-label">Chiffre d'affaires</div>
@@ -222,7 +263,7 @@ async function renderDashboard() {
               <div class="rank-number rank-${i < 3 ? i + 1 : 'other'}">${i + 1}</div>
               <div class="rank-info">
                 <div class="rank-name">${esc(p.nom)}</div>
-                <div class="rank-detail">${p.quantite_totale} ${p.unite === 'kg' ? 'kg vendus' : 'unités vendues'}</div>
+                <div class="rank-detail">${fmtQty(p.quantite_totale)} ${p.unite === 'kg' ? 'kg vendus' : 'unités vendues'}</div>
               </div>
               <div class="rank-value">${fmt(p.ca_total)}${pct(p.ca_total, stats.chiffre_affaires) != null ? `<span class="rank-pct">${pct(p.ca_total, stats.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
@@ -250,11 +291,7 @@ async function renderDashboard() {
         </div>`}
       </div>
     </div>
-
-    ${preparationPanelHTML()}
   `;
-
-  initPreparationPanel();
 }
 
 function renderRelanceList(list) {
@@ -503,7 +540,7 @@ function renderProduitStatsBody(data) {
       <div class="stats-grid">
         <div class="stat-card green">
           <div class="stat-label">Quantité vendue</div>
-          <div class="stat-value green">${data.quantite_totale} ${uniteLabel}</div>
+          <div class="stat-value green">${fmtQty(data.quantite_totale)} ${uniteLabel}</div>
           ${comp ? deltaBadge(comp.delta_quantite_pct) : ''}
         </div>
         <div class="stat-card gold">
@@ -513,7 +550,7 @@ function renderProduitStatsBody(data) {
         </div>
         <div class="stat-card blue">
           <div class="stat-label">Moyenne / semaine</div>
-          <div class="stat-value blue">${Math.round(data.moyenne_semaine_quantite * 10) / 10} ${uniteShort}</div>
+          <div class="stat-value blue">${fmtQty(Math.round(data.moyenne_semaine_quantite * 10) / 10)} ${uniteShort}</div>
         </div>
         <div class="stat-card blue">
           <div class="stat-label">CA moyen / semaine</div>
@@ -548,7 +585,7 @@ function renderProduitStatsBody(data) {
               <div class="rank-number rank-${i < 3 ? i + 1 : 'other'}">${i + 1}</div>
               <div class="rank-info">
                 <div class="rank-name">${esc(c.nom)}</div>
-                <div class="rank-detail">${c.quantite} ${uniteLabel} · ${c.nb_commandes} cmd</div>
+                <div class="rank-detail">${fmtQty(c.quantite)} ${uniteLabel} · ${c.nb_commandes} cmd</div>
               </div>
               <div class="rank-value">${fmt(c.ca_total)}</div>
             </li>
@@ -594,7 +631,7 @@ function renderProduitStatsChart(evolution, unite) {
       maintainAspectRatio: false,
       plugins: {
         legend: { position: 'top', labels: { usePointStyle: true, padding: 16 } },
-        tooltip: { callbacks: { label: ctx => ctx.dataset.yAxisID === 'y1' ? ctx.dataset.label + ': ' + fmt(ctx.raw) : ctx.dataset.label + ': ' + ctx.raw } }
+        tooltip: { callbacks: { label: ctx => ctx.dataset.yAxisID === 'y1' ? ctx.dataset.label + ': ' + fmt(ctx.raw) : ctx.dataset.label + ': ' + fmtQty(ctx.raw) } }
       },
       scales: {
         y: { position: 'left', beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } },
@@ -650,9 +687,24 @@ function resetPreparationFilter() {
   loadPreparationPanel('', '');
 }
 
-async function loadPreparationPanel(debut, fin) {
+// Apres une action sur une commande du panneau (validation, modification,
+// suppression) : recharge le panneau ET les indicateurs de la page qui
+// l'heberge (CA, top, nb commandes...), qui restaient sinon perimes.
+// Rechargement "silencieux" du panneau (sans etat "Chargement...") pour ne
+// pas faire sauter le defilement de la page pendant la mise a jour.
+function refreshAfterPreparationChange() {
+  const debut = document.getElementById('prep-debut')?.value || '';
+  const fin = document.getElementById('prep-fin')?.value || '';
+  loadPreparationPanel(debut, fin, { silent: true });
+  const refresh = currentPage === 'dashboard' ? refreshDashboardBody()
+    : currentPage === 'statistiques' ? refreshStats()
+    : null;
+  if (refresh) refresh.catch(e => toast(e.message, 'error'));
+}
+
+async function loadPreparationPanel(debut, fin, { silent = false } = {}) {
   const body = document.getElementById('preparation-body');
-  if (body) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted)">Chargement...</div>';
+  if (body && !silent) body.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text-muted)">Chargement...</div>';
 
   const qs = prepQS(debut, fin);
   let recap, commandesEnCours;
@@ -684,7 +736,7 @@ function renderPreparationBody(recap, commandesEnCours, debut, fin) {
           ${recap.produits.map(r => `
             <tr>
               <td><strong>${esc(r.nom)}</strong></td>
-              <td class="text-right">${r.quantite_totale} ${r.unite === 'kg' ? 'kg' : 'unité(s)'}</td>
+              <td class="text-right">${fmtQty(r.quantite_totale)} ${r.unite === 'kg' ? 'kg' : 'unité(s)'}</td>
               <td class="text-right">${r.nb_commandes}</td>
             </tr>
           `).join('')}
@@ -833,7 +885,7 @@ function openClientModal(id) {
           <input id="c-actif" type="checkbox" ${!c || c.actif ? 'checked' : ''}>
           Client actif
         </label>
-        <span class="form-hint">Un client inactif reste dans l'historique mais n'apparaît plus dans la liste pour une nouvelle commande</span>
+        <span class="form-hint">Un client inactif reste sélectionnable pour une commande (marqué « inactif ») mais n'est plus compté dans les clients actifs ni proposé dans les clients à relancer</span>
       </div>
     </div>
     <div class="modal-footer">
@@ -936,7 +988,7 @@ function renderCommandesTable(list) {
           <td><strong>${esc(c.client_nom)}</strong></td>
           <td><span class="badge badge-green">${c.lignes.length} produit${c.lignes.length > 1 ? 's' : ''}</span></td>
           <td>${c.livraison ? `<span class="badge badge-livraison">${esc(c.livraison)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
-          <td class="text-right price-display">${fmt(c.prix_total)}${c.prix_manuel != null ? ' <span class="badge badge-gold" title="Prix modifié manuellement">Promo</span>' : ''}</td>
+          <td class="text-right price-display">${fmt(c.prix_total)}${hasPromo(c) ? ' <span class="badge badge-gold" title="Prix modifié manuellement">Promo</span>' : ''}</td>
           <td class="table-actions" onclick="event.stopPropagation()">
             ${c.statut === 'en_cours' ? `<button class="btn-icon" onclick="validerCommande(${c.id})" title="Marquer comme vendue">✅</button>` : ''}
             <button class="btn-icon" onclick="openCommandeModal(${c.id})" title="Modifier">✏️</button>
@@ -952,13 +1004,9 @@ function openCommandeDetail(id) {
   const c = commandes.find(x => x.id === id);
   if (!c) return;
   
-  const totalCalc = c.lignes.reduce((s, l) => s + l.prix_ligne, 0);
-  // Comparaison avec tolerance (0.5 centime) plutot que !== strict : deux
-  // sommes en euros calculees differemment peuvent diverger de quelques
-  // 10^-14 a cause des flottants, ce qui faisait parfois apparaitre le badge
-  // "Promo" alors qu'aucun prix manuel differencie n'avait ete applique.
-  const hasPromo = c.prix_manuel != null && Math.abs(c.prix_manuel - totalCalc) > 0.005;
-  
+  const totalCalc = lignesTotal(c);
+  const promo = hasPromo(c);
+
   openModal(`
     <div class="modal-header">
       <h3>Commande #${c.id}</h3>
@@ -993,7 +1041,7 @@ function openCommandeDetail(id) {
               <tr>
                 <td><strong>${esc(l.produit_nom)}</strong></td>
                 <td><span class="badge badge-green">${l.produit_unite === 'kg' ? 'kg' : 'unité'}</span></td>
-                <td class="text-right">${l.quantite}${l.produit_unite === 'kg' ? ' kg' : 'x'}</td>
+                <td class="text-right">${fmtQty(l.quantite)}${l.produit_unite === 'kg' ? ' kg' : 'x'}</td>
                 <td class="text-right">${fmt(l.prix_unitaire)}</td>
                 <td class="text-right price-display">${fmt(l.prix_ligne)}</td>
               </tr>
@@ -1007,7 +1055,7 @@ function openCommandeDetail(id) {
           <span>Sous-total articles</span>
           <span class="price-display">${fmt(totalCalc)}</span>
         </div>
-        ${hasPromo ? `
+        ${promo ? `
         <div class="detail-total-row promo">
           <span>Prix promotionnel appliqué</span>
           <span class="price-display">${fmt(c.prix_manuel)}</span>
@@ -1194,6 +1242,7 @@ async function saveCommande(id) {
     return;
   }
   for (const l of commandeLignes) {
+    if (!l.produit_id) { toast('Sélectionnez un produit pour chaque ligne (créez d\'abord un produit si la liste est vide)', 'error'); return; }
     if (!(l.quantite > 0)) { toast('La quantité de chaque produit doit être supérieure à 0', 'error'); return; }
     if (!(l.prix_unitaire >= 0)) { toast('Le prix unitaire ne peut pas être négatif', 'error'); return; }
   }
@@ -1214,7 +1263,7 @@ async function saveCommande(id) {
       toast(statut === 'vendu' ? 'Commande créée et marquée vendue' : 'Commande créée (en cours de préparation)');
     }
     closeModal();
-    if (commandeModalContext === 'preparation') refreshPreparationPanel();
+    if (commandeModalContext === 'preparation') refreshAfterPreparationChange();
     else renderCommandes();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1224,7 +1273,7 @@ async function deleteCommande(id, context) {
   try {
     await api('/commandes/' + id, 'DELETE');
     toast('Commande supprimée');
-    if (context === 'preparation') refreshPreparationPanel();
+    if (context === 'preparation') refreshAfterPreparationChange();
     else renderCommandes();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1233,7 +1282,7 @@ async function validerCommande(id, context) {
   try {
     await api('/commandes/' + id + '/valider', 'POST');
     toast('Commande validée comme vendue');
-    if (context === 'preparation') refreshPreparationPanel();
+    if (context === 'preparation') refreshAfterPreparationChange();
     else renderCommandes();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -1379,8 +1428,8 @@ async function renderStatistiques() {
           <label>Au</label>
           <input type="date" id="stat-fin" value="${fin}">
           <div class="segmented">
-            <button class="active" data-val="mois" onclick="setStatsGranularite('mois')">Mois</button>
-            <button data-val="semaine" onclick="setStatsGranularite('semaine')">Semaine</button>
+            <button class="${statsGranularite === 'mois' ? 'active' : ''}" data-val="mois" onclick="setStatsGranularite('mois')">Mois</button>
+            <button class="${statsGranularite === 'semaine' ? 'active' : ''}" data-val="semaine" onclick="setStatsGranularite('semaine')">Semaine</button>
           </div>
           <button class="btn btn-primary btn-sm" onclick="refreshStats()">Actualiser</button>
         </div>
@@ -1494,7 +1543,7 @@ async function refreshStats() {
               <div class="rank-number rank-${i < 3 ? i + 1 : 'other'}">${i + 1}</div>
               <div class="rank-info">
                 <div class="rank-name">${esc(p.nom)}</div>
-                <div class="rank-detail">${p.quantite_totale} ${p.unite === 'kg' ? 'kg' : 'unités'}</div>
+                <div class="rank-detail">${fmtQty(p.quantite_totale)} ${p.unite === 'kg' ? 'kg' : 'unités'}</div>
               </div>
               <div class="rank-value">${fmt(p.ca_total)}${pct(p.ca_total, dashboard.chiffre_affaires) != null ? `<span class="rank-pct">${pct(p.ca_total, dashboard.chiffre_affaires)}% du CA</span>` : ''}</div>
             </li>
@@ -1770,18 +1819,33 @@ async function checkForUpdates() {
       showUpdateBanner('downloading', data);
     } else if (data.status === 'ready') {
       showUpdateBanner('ready', data);
-    } else if (data.status === 'error' || data.status === 'up-to-date' || data.status === 'idle') {
-      // No update or error - remove banner if present, stop polling
+    } else if (data.status === 'idle' || data.status === 'checking') {
+      // Verification pas encore terminee cote Electron : on continue d'interroger.
+    } else {
+      // A jour, erreur, ou statut absent (mode navigateur "npm start", qui
+      // n'expose pas electron-updater) : on retire le bandeau et on arrete
+      // d'interroger, au lieu de solliciter GitHub toutes les 10 s.
       const existing = document.getElementById('update-banner');
-      if (existing && data.status !== 'idle') existing.remove();
-      if (data.status !== 'idle' && data.status !== 'checking') {
-        clearInterval(updatePollInterval);
-        updatePollInterval = null;
-      }
+      if (existing) existing.remove();
+      stopUpdatePolling();
     }
   } catch (e) {
     // Silently ignore
   }
+}
+
+function stopUpdatePolling() {
+  clearInterval(updatePollInterval);
+  updatePollInterval = null;
+}
+
+// "Plus tard" : on arrete aussi l'interrogation, sinon le controle suivant
+// (10 s plus tard) recreait aussitot le bandeau. Il reapparaitra au
+// prochain lancement de l'application.
+function dismissUpdateBanner() {
+  const existing = document.getElementById('update-banner');
+  if (existing) existing.remove();
+  stopUpdatePolling();
 }
 
 function showUpdateBanner(state, data) {
@@ -1803,7 +1867,7 @@ function showUpdateBanner(state, data) {
       </div>
       <div class="update-banner-actions">
         <button class="btn btn-primary btn-sm" onclick="downloadUpdate()">Mettre a jour</button>
-        <button class="btn btn-secondary btn-sm" onclick="this.closest('#update-banner').remove()">Plus tard</button>
+        <button class="btn btn-secondary btn-sm" onclick="dismissUpdateBanner()">Plus tard</button>
       </div>
     </div>`;
   } else if (state === 'downloading') {
@@ -1823,11 +1887,10 @@ function showUpdateBanner(state, data) {
       </div>
       <div class="update-banner-actions">
         <button class="btn btn-primary btn-sm" onclick="installUpdate()">Redemarrer maintenant</button>
-        <button class="btn btn-secondary btn-sm" onclick="this.closest('#update-banner').remove()">Plus tard</button>
+        <button class="btn btn-secondary btn-sm" onclick="dismissUpdateBanner()">Plus tard</button>
       </div>
     </div>`;
-    clearInterval(updatePollInterval);
-    updatePollInterval = null;
+    stopUpdatePolling();
   }
 }
 

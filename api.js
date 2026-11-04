@@ -13,10 +13,18 @@ function isValidStatut(s) {
   return s === 'en_cours' || s === 'vendu';
 }
 
-// Verifie que chaque ligne de commande a une quantite > 0 et un prix >= 0.
+function isValidUnite(u) {
+  return u === 'kg' || u === 'unite';
+}
+
+// Verifie que chaque ligne de commande reference un produit et a une
+// quantite > 0 et un prix >= 0.
 // Retourne un message d'erreur (string) ou null si tout est valide.
 function validateLignes(lignes) {
   for (const l of lignes) {
+    if (!Number.isInteger(l.produit_id) || l.produit_id <= 0) {
+      return 'Chaque ligne de commande doit avoir un produit';
+    }
     if (!isValidNumber(l.quantite) || l.quantite <= 0) {
       return 'La quantite de chaque produit doit etre un nombre superieur a 0';
     }
@@ -87,6 +95,7 @@ function createApiRouter() {
     const { nom, prix, unite } = req.body;
     if (!nom || prix == null || !unite) return res.status(400).json({ error: 'Champs requis manquants' });
     if (!isValidNumber(prix) || prix < 0) return res.status(400).json({ error: 'Le prix doit etre un nombre positif ou nul' });
+    if (!isValidUnite(unite)) return res.status(400).json({ error: 'Unite invalide' });
     const result = run('INSERT INTO produits (nom, prix, unite) VALUES (?, ?, ?)', [nom, prix, unite]);
     res.json({ id: result.lastId, nom, prix, unite });
   });
@@ -95,6 +104,7 @@ function createApiRouter() {
     const { nom, prix, unite } = req.body;
     if (!nom || prix == null || !unite) return res.status(400).json({ error: 'Champs requis manquants' });
     if (!isValidNumber(prix) || prix < 0) return res.status(400).json({ error: 'Le prix doit etre un nombre positif ou nul' });
+    if (!isValidUnite(unite)) return res.status(400).json({ error: 'Unite invalide' });
     run('UPDATE produits SET nom=?, prix=?, unite=? WHERE id=?', [nom, prix, unite, req.params.id]);
     res.json({ success: true });
   });
@@ -233,7 +243,11 @@ function createApiRouter() {
     if (prix_manuel != null && (!isValidNumber(prix_manuel) || prix_manuel < 0)) {
       return res.status(400).json({ error: 'Le prix manuel doit etre un nombre positif ou nul' });
     }
-    const finalStatut = statut != null ? statut : 'en_cours';
+    const existing = query('SELECT statut FROM commandes WHERE id = ?', [req.params.id])[0];
+    if (!existing) return res.status(404).json({ error: 'Commande introuvable' });
+    // Sans statut explicite, une modification conserve le statut actuel (une
+    // commande deja vendue ne doit pas repasser "en cours" par defaut).
+    const finalStatut = statut != null ? statut : existing.statut;
     if (!isValidStatut(finalStatut)) return res.status(400).json({ error: 'Statut invalide' });
 
     let prix_total = 0;
@@ -746,7 +760,9 @@ function createApiRouter() {
     function toCSV(arr) {
       if (arr.length === 0) return '';
       const headers = Object.keys(arr[0]);
-      const rows = arr.map(r => headers.map(h => `"${String(r[h] || '').replace(/"/g, '""')}"`).join(','));
+      // `== null` et non `|| ''` : un 0 (client inactif, prix nul...) doit
+      // rester "0" dans le CSV et non devenir une case vide.
+      const rows = arr.map(r => headers.map(h => `"${String(r[h] == null ? '' : r[h]).replace(/"/g, '""')}"`).join(','));
       return [headers.join(','), ...rows].join('\n');
     }
 
@@ -762,4 +778,18 @@ function createApiRouter() {
   return router;
 }
 
-module.exports = { createApiRouter };
+// Gestionnaire d'erreurs a monter APRES toutes les routes /api (dans
+// server.js et main.js) : renvoie toujours du JSON { error } au lieu de la
+// page HTML par defaut d'Express (avec la trace de la pile), que le frontend
+// ne savait pas lire. Couvre aussi les erreurs de express.json() (corps
+// invalide ou trop volumineux), levees avant meme d'atteindre le routeur.
+function apiErrorHandler(err, req, res, next) {
+  console.error('API error:', req.method, req.originalUrl, err);
+  if (res.headersSent) return next(err);
+  // sql.js leve parfois une simple chaine plutot qu'un objet Error.
+  const message = (err && err.message) || String(err);
+  const status = (err && (err.status || err.statusCode)) || 500;
+  res.status(status).json({ error: status === 500 ? 'Erreur serveur : ' + message : message });
+}
+
+module.exports = { createApiRouter, apiErrorHandler };

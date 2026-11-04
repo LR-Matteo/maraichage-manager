@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const dbLayer = require('./db');
-const { createApiRouter } = require('./api');
+const { createApiRouter, apiErrorHandler } = require('./api');
 
 const app = express();
 const PORT = 3847;
@@ -56,6 +56,8 @@ function compareVersions(a, b) {
   }
   return 0;
 }
+
+app.use(apiErrorHandler);
 
 // ========== START ==========
 dbLayer.initDB(DB_PATH).then(() => {
