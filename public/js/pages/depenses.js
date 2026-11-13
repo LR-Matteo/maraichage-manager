@@ -4,15 +4,15 @@
 
 // ========== DEPENSES ==========
 async function renderDepenses() {
-  depenses = await api('/depenses');
+  depenses = await api(avecAnnee('/depenses'));
   const main = document.getElementById('main-content');
   const total = depenses.reduce((s, d) => s + d.prix, 0);
-  
+
   main.innerHTML = `
     <div class="page-header">
       <div>
-        <h2>Dépenses</h2>
-        <p class="subtitle">${depenses.length} dépense${depenses.length > 1 ? 's' : ''} — Total : ${fmt(total)}</p>
+        <h2>Dépenses${estToutesAnnees() ? '' : ' ' + anneeSelectionnee}</h2>
+        <p class="subtitle">${depenses.length} dépense${depenses.length > 1 ? 's' : ''} ${libelleAnnee()} — Total : ${fmt(total)}</p>
       </div>
       <button class="btn btn-primary" onclick="openDepenseModal()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -25,6 +25,7 @@ async function renderDepenses() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input type="text" placeholder="Rechercher une dépense..." oninput="filterDepenses(this.value)">
       </div>
+      ${selecteurAnneeHTML()}
     </div>
 
     <div class="card" style="padding:0">
@@ -36,7 +37,7 @@ async function renderDepenses() {
 }
 
 function renderDepensesTable(list) {
-  if (list.length === 0) return '<div class="empty-state"><div class="icon">💸</div><p>Aucune dépense enregistrée</p><button class="btn btn-primary" onclick="openDepenseModal()">Ajouter une dépense</button></div>';
+  if (list.length === 0) return `<div class="empty-state"><div class="icon">💸</div><p>Aucune dépense ${libelleAnnee()}</p><button class="btn btn-primary" onclick="openDepenseModal()">Ajouter une dépense</button></div>`;
   return `<table>
     <thead><tr><th>Date</th><th>Nom</th><th>Catégorie</th><th class="text-right">Montant</th><th class="text-right">Actions</th></tr></thead>
     <tbody>
@@ -107,6 +108,8 @@ async function saveDepense(id) {
     if (id) { await api('/depenses/' + id, 'PUT', { nom, date_depense, prix, categorie }); toast('Dépense modifiée'); }
     else { await api('/depenses', 'POST', { nom, date_depense, prix, categorie }); toast('Dépense créée'); }
     closeModal();
+    signalerHorsAnnee(date_depense, 'Dépense');
+    await chargerAnnees();
     renderDepenses();
   } catch (e) { toast(e.message, 'error'); }
 }

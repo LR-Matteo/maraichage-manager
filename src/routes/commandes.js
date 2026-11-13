@@ -11,11 +11,12 @@ const router = express.Router();
 // ou un produit a ete supprime depuis reste visible, avec un nom de
 // remplacement, au lieu de disparaitre silencieusement des listes et des
 // statistiques.
-// Filtres optionnels ?statut=en_cours|vendu et ?debut=&fin= (utilises par
-// le panneau "commandes a preparer") ; sans filtre, comportement inchange
-// (toutes les commandes, pour l'onglet Commandes).
+// Filtres optionnels ?statut=en_cours|vendu, ?debut=&fin= (annee affichee,
+// panneau "commandes a preparer") et ?limit=N (N plus recentes, ex: tableau
+// de bord) ; sans filtre, toutes les commandes.
 router.get('/commandes', (req, res) => {
   const { statut, debut, fin } = req.query;
+  const limit = parseInt(req.query.limit, 10);
   const clauses = [];
   const params = [];
   if (statut) {
@@ -34,18 +35,20 @@ router.get('/commandes', (req, res) => {
     FROM commandes c
     LEFT JOIN clients cl ON c.client_id = cl.id
     ${where}
-    ORDER BY c.date_commande DESC
-  `, params);
+    ORDER BY c.date_commande DESC, c.id DESC
+    ${limit > 0 ? 'LIMIT ?' : ''}
+  `, limit > 0 ? [...params, limit] : params);
 
-  // Toutes les lignes de toutes les commandes en UNE requete (au lieu
-  // d'une requete par commande) puis regroupees en memoire : evite un
-  // profil N+1 qui deviendrait sensible avec plusieurs centaines/milliers
-  // de commandes.
+  // Toutes les lignes en UNE requete (au lieu d'une requete par commande)
+  // puis regroupees en memoire : evite un profil N+1 qui deviendrait
+  // sensible avec plusieurs centaines/milliers de commandes. Avec ?limit,
+  // seules les lignes des quelques commandes retenues sont chargees.
+  const limitClause = limit > 0 ? ` WHERE cl.commande_id IN (${commandes.map(() => '?').join(',') || 'NULL'})` : '';
   const allLignes = query(`
     SELECT cl.*, COALESCE(p.nom, 'Produit supprimé') as produit_nom, COALESCE(p.unite, 'unite') as produit_unite
     FROM commande_lignes cl
-    LEFT JOIN produits p ON cl.produit_id = p.id
-  `);
+    LEFT JOIN produits p ON cl.produit_id = p.id${limitClause}
+  `, limit > 0 ? commandes.map(c => c.id) : []);
   const lignesByCommande = new Map();
   for (const l of allLignes) {
     if (!lignesByCommande.has(l.commande_id)) lignesByCommande.set(l.commande_id, []);

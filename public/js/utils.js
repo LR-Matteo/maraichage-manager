@@ -76,6 +76,36 @@ function fmtPeriode(p, granularite) {
   return granularite === 'semaine' ? fmtWeek(p) : fmtMonth(p);
 }
 
+const MOIS_COURTS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
+const MOIS_LONGS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+// Evolution en % de `actuel` par rapport a `reference` (null si pas de
+// reference). Denominateur en valeur absolue pour un benefice negatif.
+function deltaPct(actuel, reference) {
+  if (!reference) return null;
+  return Math.round((actuel - reference) / Math.abs(reference) * 100);
+}
+
+// Pastille d'evolution "+12% vs 2025". `inverse` : une hausse est mauvaise
+// (depenses), elle s'affiche alors en rouge et une baisse en vert.
+function deltaBadge(pctVal, libelle, inverse = false) {
+  if (pctVal == null) return `<span class="stat-delta flat">${libelle} : —</span>`;
+  const bon = inverse ? pctVal < 0 : pctVal > 0;
+  const cls = pctVal === 0 ? 'flat' : bon ? 'up' : 'down';
+  const sign = pctVal > 0 ? '+' : '';
+  return `<span class="stat-delta ${cls}">${sign}${pctVal}% ${libelle}</span>`;
+}
+
+// Pastille "+12%" seule, pour une cellule de tableau de comparaison
+// ("—" s'il n'y a pas de reference).
+function celluleEvolution(a, b, inverse = false) {
+  const p = deltaPct(a, b);
+  if (p == null) return '<span style="color:var(--text-muted)">—</span>';
+  const bon = inverse ? p < 0 : p > 0;
+  const cls = p === 0 ? 'flat' : bon ? 'up' : 'down';
+  return `<span class="stat-delta ${cls}" style="margin:0">${p > 0 ? '+' : ''}${p}%</span>`;
+}
+
 function toast(msg, type = 'success') {
   const c = document.getElementById('toast-container');
   const t = document.createElement('div');
@@ -107,6 +137,7 @@ function openModal(html, opts = {}) {
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
   if (produitStatsChart) { produitStatsChart.destroy(); produitStatsChart = null; }
+  if (produitCmpChart) { produitCmpChart.destroy(); produitCmpChart = null; }
 }
 
 function destroyCharts() {

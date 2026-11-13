@@ -6,14 +6,15 @@
 let commandeLignes = [];
 
 async function renderCommandes() {
-  commandes = await api('/commandes');
+  commandes = await api(avecAnnee('/commandes'));
   const main = document.getElementById('main-content');
+  const totalVendu = commandes.filter(c => c.statut === 'vendu').reduce((s, c) => s + c.prix_total, 0);
 
   main.innerHTML = `
     <div class="page-header">
       <div>
-        <h2>Commandes</h2>
-        <p class="subtitle">${commandes.length} commande${commandes.length > 1 ? 's' : ''}</p>
+        <h2>Commandes${estToutesAnnees() ? '' : ' ' + anneeSelectionnee}</h2>
+        <p class="subtitle">${commandes.length} commande${commandes.length > 1 ? 's' : ''} ${libelleAnnee()} — ${fmt(totalVendu)} vendus</p>
       </div>
       <button class="btn btn-primary" onclick="openCommandeModal()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -26,10 +27,13 @@ async function renderCommandes() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input type="text" placeholder="Rechercher par client ou lieu de livraison..." oninput="filterCommandes(this.value)">
       </div>
-      <div class="segmented">
-        <button class="${commandesStatutFilter === 'toutes' ? 'active' : ''}" onclick="setCommandesStatutFilter('toutes')">Toutes</button>
-        <button class="${commandesStatutFilter === 'en_cours' ? 'active' : ''}" onclick="setCommandesStatutFilter('en_cours')">En cours</button>
-        <button class="${commandesStatutFilter === 'vendu' ? 'active' : ''}" onclick="setCommandesStatutFilter('vendu')">Vendu</button>
+      <div class="flex-center gap-sm">
+        ${selecteurAnneeHTML()}
+        <div class="segmented">
+          <button class="${commandesStatutFilter === 'toutes' ? 'active' : ''}" onclick="setCommandesStatutFilter('toutes')">Toutes</button>
+          <button class="${commandesStatutFilter === 'en_cours' ? 'active' : ''}" onclick="setCommandesStatutFilter('en_cours')">En cours</button>
+          <button class="${commandesStatutFilter === 'vendu' ? 'active' : ''}" onclick="setCommandesStatutFilter('vendu')">Vendu</button>
+        </div>
       </div>
     </div>
 
@@ -63,7 +67,7 @@ function statutBadge(statut) {
 }
 
 function renderCommandesTable(list) {
-  if (list.length === 0) return '<div class="empty-state"><div class="icon">🛒</div><p>Aucune commande enregistrée</p><button class="btn btn-primary" onclick="openCommandeModal()">Créer une commande</button></div>';
+  if (list.length === 0) return `<div class="empty-state"><div class="icon">🛒</div><p>Aucune commande ${libelleAnnee()}</p><button class="btn btn-primary" onclick="openCommandeModal()">Créer une commande</button></div>`;
   return `<table>
     <thead><tr><th>N°</th><th>Statut</th><th>Date</th><th>Client</th><th>Produits</th><th>Livraison</th><th class="text-right">Total</th><th class="text-right">Actions</th></tr></thead>
     <tbody>
@@ -350,6 +354,9 @@ async function saveCommande(id) {
       toast(statut === 'vendu' ? 'Commande créée et marquée vendue' : 'Commande créée (en cours de préparation)');
     }
     closeModal();
+    signalerHorsAnnee(date_commande, 'Commande');
+    // Une commande datee d'une nouvelle annee doit apparaitre dans le selecteur
+    await chargerAnnees();
     if (commandeModalContext === 'preparation') refreshAfterPreparationChange();
     else renderCommandes();
   } catch (e) { toast(e.message, 'error'); }

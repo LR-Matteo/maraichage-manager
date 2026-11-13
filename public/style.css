@@ -93,6 +93,47 @@ body {
   font-family: var(--font-body);
 }
 
+/* Selecteur d'annee affichee */
+.sidebar-annee {
+  padding: 16px 24px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-annee label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-sidebar);
+}
+
+.sidebar-annee select {
+  appearance: none;
+  padding: 9px 36px 9px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius-sm);
+  background: var(--sidebar-hover) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23B8C5BA' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 12px center;
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.sidebar-annee select:hover,
+.sidebar-annee select:focus {
+  outline: none;
+  border-color: var(--accent-light);
+}
+
+.sidebar-annee option {
+  background: #fff;
+  color: var(--text-primary);
+}
+
 .nav-list {
   list-style: none;
   padding: 16px 12px;
@@ -710,6 +751,109 @@ tbody tr:last-child td {
 .chart-wrapper {
   position: relative;
   height: 300px;
+}
+
+/* ═══════════ COMPARAISONS ENTRE ANNEES ═══════════ */
+.section-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  margin: 28px 0 14px;
+}
+
+.sous-titre-comparaison {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 20px 0 10px;
+}
+
+.table-comparaison tfoot td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+  background: var(--bg-primary);
+}
+
+/* Fiche produit : comparaison par annee */
+.produit-cmp {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 2px solid var(--border-light);
+}
+
+.produit-cmp-titre {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  --chip-couleur: var(--accent);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chip:hover { border-color: var(--chip-couleur); }
+
+.chip.active {
+  background: var(--chip-couleur);
+  border-color: var(--chip-couleur);
+  color: #fff;
+}
+
+.produit-cmp th,
+.produit-cmp td {
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.table-scroll {
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-tertiary);
+}
+
+.periode-dates {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Selecteur d'annee integre dans une page (Commandes, Depenses) */
+.annee-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.annee-inline select {
+  width: auto;
+  padding: 8px 32px 8px 12px;
 }
 
 /* ═══════════ RANKING TABLE ═══════════ */

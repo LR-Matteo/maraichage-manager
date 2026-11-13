@@ -10,6 +10,7 @@ const ROUTES = [
   require('./routes/commandes'),
   require('./routes/depenses'),
   require('./routes/stats'),
+  require('./routes/annees'),
   require('./routes/preparation'),
   require('./routes/sauvegarde')
 ];

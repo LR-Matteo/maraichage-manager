@@ -69,15 +69,37 @@ function parseISODate(str) {
   const [y, m, d] = str.split('-').map(Number);
   return Date.UTC(y, m - 1, d);
 }
-function formatISODate(utcMs) {
-  const d = new Date(utcMs);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
 function daysBetween(a, b) {
   return Math.round((parseISODate(b) - parseISODate(a)) / 86400000);
+}
+
+// Numero de semaine (1 a 52) d'une date dans son annee civile, compte par
+// blocs de 7 jours depuis le 1er janvier : S1 = 1er-7 janvier, S2 = 8-14...
+// Contrairement aux semaines ISO, une meme semaine couvre ainsi les memes
+// dates d'une annee sur l'autre, ce qui rend les comparaisons justes. Le ou
+// les 1-2 derniers jours de l'annee sont rattaches a la S52 (qui va donc du
+// 24 au 31 decembre, du 23 les annees bissextiles) plutot que de former une
+// S53 quasi vide.
+function semaineDansAnnee(str) {
+  const jour = daysBetween(`${str.slice(0, 4)}-01-01`, str); // 0 = 1er janvier
+  return Math.min(52, Math.floor(jour / 7) + 1);
+}
+
+// Decale une date "YYYY-MM-DD" de n annees, en ramenant le 29 fevrier au 28
+// si l'annee cible n'est pas bissextile.
+function shiftYear(str, n) {
+  const [y, m, d] = str.split('-').map(Number);
+  const ty = y + n;
+  const dernierJour = new Date(Date.UTC(ty, m, 0)).getUTCDate();
+  return `${ty}-${String(m).padStart(2, '0')}-${String(Math.min(d, dernierJour)).padStart(2, '0')}`;
+}
+
+// Evolution en % de `actuel` par rapport a `reference`, arrondie a l'entier.
+// null si la reference est nulle (pas de base de comparaison). Denominateur
+// en valeur absolue pour rester lisible avec un benefice negatif.
+function deltaPct(actuel, reference) {
+  if (!reference) return null;
+  return Math.round((actuel - reference) / Math.abs(reference) * 100);
 }
 
 module.exports = {
@@ -89,6 +111,8 @@ module.exports = {
   whereFrom,
   strftimeFormat,
   parseISODate,
-  formatISODate,
-  daysBetween
+  daysBetween,
+  semaineDansAnnee,
+  shiftYear,
+  deltaPct
 };

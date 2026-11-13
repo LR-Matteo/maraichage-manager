@@ -6,20 +6,21 @@
 async function renderStatistiques() {
   const main = document.getElementById('main-content');
 
-  // Default range: last 12 months
-  const now = new Date();
-  const debut = todayLocal(new Date(now.getFullYear() - 1, now.getMonth(), 1));
-  const fin = todayLocal(now);
+  // Periode par defaut : l'annee affichee dans la barre laterale (vide =
+  // aucun filtre pour "toutes les annees"), affinable avec les dates.
+  const { debut, fin } = periodeAnnee();
+  // Liste des produits pour l'indicateur "quantites" de la comparaison annuelle
+  produits = await api('/produits');
 
   main.innerHTML = `
     <div class="page-header">
       <div>
-        <h2>Statistiques</h2>
-        <p class="subtitle">Analyse des performances de votre activité</p>
+        <h2>Statistiques${estToutesAnnees() ? '' : ' ' + anneeSelectionnee}</h2>
+        <p class="subtitle">Analyse des performances de votre activité ${libelleAnnee()}</p>
       </div>
     </div>
 
-    <div class="card mb-2">
+    <div class="card mb-2" id="stats-periode">
       <div class="flex-between flex-wrap gap-sm">
         <h3 style="font-size:15px">Période d'analyse</h3>
         <div class="date-range-picker">
@@ -40,16 +41,18 @@ async function renderStatistiques() {
       <div style="text-align:center;padding:40px;color:var(--text-muted)">Chargement des statistiques...</div>
     </div>
 
+    ${comparaisonsHTML()}
+
     ${preparationPanelHTML()}
   `;
 
-  await refreshStats();
+  await Promise.all([refreshStats(), initComparaisons()]);
   initPreparationPanel();
 }
 
 function setStatsGranularite(val) {
   statsGranularite = val;
-  document.querySelectorAll('#main-content .segmented button').forEach(b => {
+  document.querySelectorAll('#stats-periode .segmented button').forEach(b => {
     b.classList.toggle('active', b.dataset.val === val);
   });
   refreshStats();

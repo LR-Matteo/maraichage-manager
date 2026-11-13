@@ -7,7 +7,13 @@ const { isValidNumber } = require('../helpers');
 
 const router = express.Router();
 
+// Filtre optionnel ?debut=&fin= (ex: une annee complete) ; sans filtre,
+// toutes les depenses.
 router.get('/depenses', (req, res) => {
+  const { debut, fin } = req.query;
+  if (debut && fin) {
+    return res.json(query('SELECT * FROM depenses WHERE date_depense BETWEEN ? AND ? ORDER BY date_depense DESC', [debut, fin]));
+  }
   res.json(query('SELECT * FROM depenses ORDER BY date_depense DESC'));
 });
 

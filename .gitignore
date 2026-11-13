@@ -3,3 +3,4 @@ dist/
 maraichage.db
 .env
 *.log
+maraichage.*.db

@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════
 const express = require('express');
 const { query } = require('../db');
-const { buildDateFilter, whereFrom, strftimeFormat, parseISODate, formatISODate, daysBetween } = require('../helpers');
+const { buildDateFilter, whereFrom, strftimeFormat, daysBetween, shiftYear, deltaPct } = require('../helpers');
 
 const router = express.Router();
 
@@ -255,18 +255,6 @@ router.get('/stats/produit/:id', (req, res) => {
     GROUP BY periode ORDER BY periode
   `, [produitId, ...dateParams]);
 
-  const topClients = query(`
-    SELECT c.id, c.nom, COUNT(DISTINCT co.id) as nb_commandes, COALESCE(SUM(cl.quantite),0) as quantite, COALESCE(SUM(cl.prix_ligne),0) as ca_total
-    FROM clients c
-    JOIN commandes co ON c.id = co.client_id AND co.statut = 'vendu'
-    JOIN commande_lignes cl ON cl.commande_id = co.id AND cl.produit_id = ?
-    WHERE 1=1${dateClause}
-    GROUP BY c.id
-    HAVING ca_total > 0
-    ORDER BY ca_total DESC
-    LIMIT 5
-  `, [produitId, ...dateParams]);
-
   // Moyenne hebdomadaire calculee sur la duree reelle de la periode
   // consideree (periode filtree, ou a defaut duree entre 1ere et derniere
   // vente), et non sur les seules semaines ayant eu des ventes : donne un
@@ -280,25 +268,20 @@ router.get('/stats/produit/:id', (req, res) => {
   const moyenneSemaineQuantite = semaines > 0 ? totals.quantite_totale / semaines : 0;
   const moyenneSemaineCA = semaines > 0 ? totals.ca_total / semaines : 0;
 
-  const prixMoyenConstate = totals.quantite_totale > 0 ? totals.ca_total / totals.quantite_totale : null;
-
-  // Comparaison avec la periode precedente de meme duree (juste avant le
-  // debut de la periode filtree), pour donner une tendance immediate.
-  let comparaisonPrecedente = null;
+  // Comparaison avec les memes dates un an plus tot (ex: juillet 2026 vs
+  // juillet 2025) : neutralise la saisonnalite.
+  let comparaisonAnneePrecedente = null;
   if (debut && fin) {
-    const periodDays = daysBetween(debut, fin) + 1;
-    const prevFinMs = parseISODate(debut) - 86400000;
-    const prevDebutMs = prevFinMs - (periodDays - 1) * 86400000;
-    const prevDebut = formatISODate(prevDebutMs);
-    const prevFin = formatISODate(prevFinMs);
-    const prevTotals = totalsFor(prevDebut, prevFin);
-    comparaisonPrecedente = {
-      debut: prevDebut,
-      fin: prevFin,
-      quantite_totale: prevTotals.quantite_totale,
-      ca_total: prevTotals.ca_total,
-      delta_quantite_pct: prevTotals.quantite_totale > 0 ? Math.round((totals.quantite_totale - prevTotals.quantite_totale) / prevTotals.quantite_totale * 100) : null,
-      delta_ca_pct: prevTotals.ca_total > 0 ? Math.round((totals.ca_total - prevTotals.ca_total) / prevTotals.ca_total * 100) : null
+    const n1Debut = shiftYear(debut, -1);
+    const n1Fin = shiftYear(fin, -1);
+    const n1 = totalsFor(n1Debut, n1Fin);
+    comparaisonAnneePrecedente = {
+      debut: n1Debut,
+      fin: n1Fin,
+      quantite_totale: n1.quantite_totale,
+      ca_total: n1.ca_total,
+      delta_quantite_pct: deltaPct(totals.quantite_totale, n1.quantite_totale),
+      delta_ca_pct: deltaPct(totals.ca_total, n1.ca_total)
     };
   }
 
@@ -310,12 +293,10 @@ router.get('/stats/produit/:id', (req, res) => {
     nb_clients: totals.nb_clients,
     premiere_vente: totals.premiere_vente,
     derniere_vente: totals.derniere_vente,
-    prix_moyen_constate: prixMoyenConstate,
     moyenne_semaine_quantite: moyenneSemaineQuantite,
     moyenne_semaine_ca: moyenneSemaineCA,
     evolution,
-    top_clients: topClients,
-    comparaison_precedente: comparaisonPrecedente
+    comparaison_annee_precedente: comparaisonAnneePrecedente
   });
 });
 

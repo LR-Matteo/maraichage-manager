@@ -53,6 +53,17 @@ npm run build-linux     # Linux (.AppImage)
 - **Commandes** : panier multi-produits, prix auto/manuel, lieu de livraison, détail cliquable
 - **Dépenses** : nom, date, montant, catégorie
 
+### Vue par année civile
+- Sélecteur « Année affichée » dans la barre latérale (et sur les pages Commandes / Dépenses)
+- Au lancement, toujours l'année en cours : chaque 1er janvier, les compteurs repartent de 0
+- Aucune donnée effacée : les années passées restent consultables, ou « Toutes les années »
+- Tableau de bord : évolution de chaque indicateur vs l'année précédente à la même date
+- Statistiques : comparaison annuelle mois par mois (CA, dépenses, bénéfice, commandes,
+  panier moyen ou quantité d'un produit) et comparaison de deux mois au choix
+- Fiche produit : évolution vs les mêmes dates un an plus tôt, et comparaison des ventes
+  (quantité et CA) par mois ou par semaine entre plusieurs années au choix
+- Restent volontairement toutes années confondues : clients à relancer, commandes à préparer
+
 ### Statistiques & Analyses
 - Tableau de bord (CA, dépenses, bénéfice, panier moyen, marge)
 - Top clients et produits par chiffre d'affaires

@@ -10,8 +10,8 @@ async function renderDashboard() {
   main.innerHTML = `
     <div class="page-header">
       <div>
-        <h2>Tableau de bord</h2>
-        <p class="subtitle">Vue d'ensemble de votre activité</p>
+        <h2>Tableau de bord${estToutesAnnees() ? '' : ' ' + anneeSelectionnee}</h2>
+        <p class="subtitle">${estToutesAnnees() ? 'Vue d\'ensemble de toute votre activité' : `Vue d'ensemble de votre activité ${libelleAnnee()}`}</p>
       </div>
     </div>
 
@@ -31,41 +31,56 @@ async function refreshDashboardBody() {
   if (el) el.innerHTML = html;
 }
 
+// Indicateurs, tops et commandes recentes de l'annee affichee. Les clients a
+// relancer restent volontairement tous ans confondus : un client venu en
+// decembre ne doit pas disparaitre de la liste le 1er janvier.
 async function dashboardBodyHTML() {
-  const [stats, topClients, topProduits, recent, clientsRelance] = await Promise.all([
-    api('/stats/dashboard'),
-    api('/stats/top-clients?limit=5'),
-    api('/stats/top-produits?limit=5'),
-    api('/commandes'),
+  const n1 = periodeN1();
+  const [stats, statsN1, topClients, topProduits, recentCmd, clientsRelance] = await Promise.all([
+    api(avecAnnee('/stats/dashboard')),
+    n1 ? api(`/stats/dashboard?debut=${n1.debut}&fin=${n1.fin}`) : null,
+    api(avecAnnee('/stats/top-clients?limit=5')),
+    api(avecAnnee('/stats/top-produits?limit=5')),
+    api(avecAnnee('/commandes?limit=5')),
     api('/stats/clients-a-relancer?limit=' + relanceLimit)
   ]);
-  const recentCmd = recent.slice(0, 5);
+
+  // Pastille d'evolution vs N-1 sous un indicateur (rien en "toutes annees")
+  const evo = (cle, inverse = false) => statsN1
+    ? `<span title="Comparé au ${fmtDate(n1.debut)} – ${fmtDate(n1.fin)}">${deltaBadge(deltaPct(stats[cle], statsN1[cle]), n1.libelle, inverse)}</span>`
+    : '';
 
   return `
     <div class="stats-grid">
       <div class="stat-card green">
         <div class="stat-label">Chiffre d'affaires</div>
         <div class="stat-value green">${fmt(stats.chiffre_affaires)}</div>
+        ${evo('chiffre_affaires')}
       </div>
       <div class="stat-card red">
         <div class="stat-label">Dépenses totales</div>
         <div class="stat-value red">${fmt(stats.depenses)}</div>
+        ${evo('depenses', true)}
       </div>
       <div class="stat-card ${stats.benefice >= 0 ? 'blue' : 'red'}">
         <div class="stat-label">Bénéfice net</div>
         <div class="stat-value ${stats.benefice >= 0 ? 'blue' : 'red'}">${fmt(stats.benefice)}</div>
+        ${evo('benefice')}
       </div>
       <div class="stat-card gold">
         <div class="stat-label">Commandes</div>
         <div class="stat-value gold">${stats.nb_commandes}</div>
+        ${evo('nb_commandes')}
       </div>
       <div class="stat-card blue">
         <div class="stat-label">Clients actifs</div>
         <div class="stat-value blue">${stats.nb_clients_actifs}</div>
+        <div class="form-hint" style="margin:6px 0 0;">Fiches clients marquées actives</div>
       </div>
       <div class="stat-card green">
         <div class="stat-label">Panier moyen</div>
         <div class="stat-value green">${fmt(stats.panier_moyen)}</div>
+        ${evo('panier_moyen')}
       </div>
     </div>
 
@@ -118,7 +133,7 @@ async function dashboardBodyHTML() {
 
       <div class="card full-width">
         <div class="card-header"><h3>📋 Commandes récentes</h3></div>
-        ${recentCmd.length === 0 ? '<p style="color:var(--text-muted);font-size:14px;">Aucune commande</p>' : `
+        ${recentCmd.length === 0 ? `<p style="color:var(--text-muted);font-size:14px;">Aucune commande ${libelleAnnee()}</p>` : `
         <div class="table-container">
           <table>
             <thead><tr><th>Date</th><th>Client</th><th>Articles</th><th class="text-right">Total</th></tr></thead>

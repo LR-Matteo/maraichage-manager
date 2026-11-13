@@ -16,6 +16,10 @@
         <div class="brand-icon">🌿</div>
         <h1>Maraîchage<br><span>Manager</span></h1>
       </div>
+      <div class="sidebar-annee">
+        <label for="annee-select">Année affichée</label>
+        <select id="annee-select" onchange="changerAnnee(this.value)"></select>
+      </div>
       <ul class="nav-list">
         <li class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -76,6 +80,7 @@
 
   <script src="js/etat.js"></script>
   <script src="js/utils.js"></script>
+  <script src="js/annee.js"></script>
   <script src="js/navigation.js"></script>
   <script src="js/composants/preparation.js"></script>
   <script src="js/pages/tableau-de-bord.js"></script>
@@ -85,6 +90,7 @@
   <script src="js/pages/commandes.js"></script>
   <script src="js/pages/depenses.js"></script>
   <script src="js/pages/statistiques.js"></script>
+  <script src="js/pages/comparaisons.js"></script>
   <script src="js/sauvegarde.js"></script>
   <script src="js/mise-a-jour.js"></script>
   <script src="js/main.js"></script>
