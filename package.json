@@ -1,6 +1,6 @@
 {
   "name": "maraichage-manager",
-  "version": "1.3.3",
+  "version": "1.4.0",
   "description": "Application de gestion de maraichage",
   "main": "main.js",
   "scripts": {
